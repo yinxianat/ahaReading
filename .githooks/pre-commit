@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocks commits that contain .env files, PLANS/, or credential-shaped strings.
+exec node scripts/check-secrets.mjs

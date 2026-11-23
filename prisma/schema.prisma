@@ -1,0 +1,184 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Users ──────────────────────────────────────────
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  displayName    String?
+  locale         String    @default("en") // "en" | "zh" — preferred explanation language
+  helpLevel      Int       @default(1) // preferred starting help level (1..3)
+  onboardedAt    DateTime? // null until the onboarding screen is completed
+  // Carried in the session JWT as `sv`; bumping it signs out every device (SEC-10).
+  sessionVersion Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  magicTokens  MagicToken[]
+  concepts     Concept[]
+  reviewCards  ReviewCard[]
+  articles     Article[]
+  explanations Explanation[]
+}
+
+// ─── Auth ───────────────────────────────────────────
+
+model MagicToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique // HMAC-SHA256(MAGIC_LINK_SECRET, "purpose:plaintext"); plaintext is never stored
+  codeHash  String? // HMAC of the 6-digit sign-in code, salted with tokenHash; null for pre-code rows
+  attempts  Int      @default(0) // wrong-code attempts; the code locks at 5
+  next      String? // safe relative path requested at sign-in, used when verify sends none
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email     String
+  purpose   String // "login"
+  consumed  Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email, purpose, consumed])
+  @@index([expiresAt])
+}
+
+// ─── Articles ───────────────────────────────────────
+
+model Article {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url        String? // source URL, null for pasted text
+  title      String?
+  domain     String?
+  content    String? // the readable text the user is reading (capped on write)
+  lastReadAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  concepts     Concept[]
+  explanations Explanation[]
+
+  @@unique([userId, url])
+  @@index([userId, lastReadAt])
+}
+
+// ─── Explanations ───────────────────────────────────
+
+model Explanation {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  articleId       String?
+  article         Article? @relation(fields: [articleId], references: [id], onDelete: SetNull)
+  highlightedText String
+  surroundingText String
+  helpLevel       Int
+  language        String   @default("en")
+  explanation     String
+  translationZh   String? // filled by /api/translate; copied to Concept.definitionZh on save
+  aiProvider      String?
+  aiModel         String?
+  aiTokensUsed    Int?
+  aiLatencyMs     Int?
+  cacheHit        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  concept Concept?
+
+  @@index([userId, createdAt])
+  @@index([articleId])
+}
+
+// ─── AI call ledger (every attempt, success or failure) ───
+
+model AiCall {
+  id           String   @id @default(cuid())
+  task         String // "explain" | "translate"
+  provider     String
+  model        String?
+  status       String // "ok" | "infrastructure" | "refusal" | "invalid_output"
+  tokens       Int? // input + output, kept for older rows and simple sums
+  inputTokens  Int?
+  outputTokens Int?
+  latencyMs    Int?
+  detail       String? // redacted error summary
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([provider, createdAt])
+}
+
+// ─── Concept Notebook ───────────────────────────────
+
+model Concept {
+  id             String       @id @default(cuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  articleId      String?
+  article        Article?     @relation(fields: [articleId], references: [id], onDelete: SetNull)
+  explanationId  String?      @unique
+  explanation    Explanation? @relation(fields: [explanationId], references: [id], onDelete: SetNull)
+  term           String
+  definition     String
+  definitionZh   String?
+  userNotes      String?
+  tags           String[]
+  lastReviewedAt DateTime?
+  nextReviewAt   DateTime?
+  reviewCount    Int          @default(0) // lifetime reviews
+  repetitions    Int          @default(0) // SM-2 successful streak; a lapse resets it (ENG-13)
+  easeFactor     Float        @default(2.5)
+  interval       Int          @default(1)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  reviewCards ReviewCard[]
+
+  @@index([userId, nextReviewAt])
+  @@index([userId, createdAt])
+  @@index([userId, articleId])
+}
+
+// ─── Spaced Review history ──────────────────────────
+
+model ReviewCard {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conceptId  String
+  concept    Concept  @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  quality    Int // 0..5 SM-2 quality
+  clientId   String? // idempotency key for offline-queued reviews
+  reviewedAt DateTime @default(now())
+
+  @@unique([userId, clientId])
+  @@index([userId, reviewedAt])
+  @@index([conceptId])
+}
+
+// ─── Logging ────────────────────────────────────────
+
+model LogEntry {
+  id          String    @id @default(cuid())
+  level       String // "WARN" | "ERROR" | "CRITICAL"
+  source      String // "ai" | "auth" | "api" | "system" | "client" | "email"
+  message     String // constant template — no variable data
+  detail      String? // variable data of the latest occurrence, redacted
+  firstDetail String? // variable data of the first occurrence (a flood cannot overwrite it)
+  fingerprint String    @unique // sha1(source + message)
+  count       Int       @default(1)
+  resolvedAt  DateTime? // hidden from default admin view; cleared on recurrence
+  alertedAt   DateTime? // last admin alert claimed for this fingerprint (dedup survives restarts)
+  createdAt   DateTime  @default(now()) // first seen
+  lastSeenAt  DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([level, lastSeenAt])
+  @@index([source, lastSeenAt])
+}

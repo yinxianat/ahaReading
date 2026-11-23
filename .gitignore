@@ -1,0 +1,50 @@
+# AhaReading .gitignore
+#
+# Contract: `git add -A` must stage everything needed to build and deploy,
+# and must never stage a secret or the internal PLANS folder.
+# Deliberately COMMITTED: package.json, package-lock.json, next.config.mjs,
+# jsconfig.json, prisma/schema.prisma, prisma/migrations/**, prisma.config.mjs,
+# railway.json, .nvmrc, eslint.config.mjs, vitest.config.mjs, playwright.config.mjs,
+# .env.example, public/**.
+# Every directory pattern is anchored with a leading slash — an unanchored
+# `logs/` would silently exclude src/app/api/admin/logs/.
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Internal planning and lessons documents — never published
+/PLANS/
+/plans/
+
+# Dependencies / build / generated
+/node_modules/
+/.next/
+/out/
+/build/
+/coverage/
+/src/generated/
+/test-results/
+/e2e/.results/
+/e2e/.report/
+/e2e/.auth/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+next-env.d.ts
+*.tsbuildinfo
+
+# Agent tooling
+/.agents/
+/.claude/worktrees/
+/.claude/skills/
+skills-lock.json
+
+# OS / editor / logs
+.DS_Store
+*.log
+/.vercel
+/.railway
