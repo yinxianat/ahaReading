@@ -435,6 +435,48 @@ concepts but unlinks them.
 The generated client code lives in `src/generated/prisma/`; never edit it. Prisma 7 does **not** regenerate it
 automatically after a migration, so run `npx prisma generate`, or restart the dev server, after schema changes.
 
+### 5.1 Storage design: best practices and where AhaReading stands
+
+The core idea: **keep files out of Postgres and text in it.** Postgres stores the text and metadata the app
+queries; original files, if they are ever kept, belong in object storage. Use these practices when changing what
+gets stored. ✅ = already done, ⚠️ = fine for now, with a known next step.
+
+| # | Practice | Status in AhaReading |
+|---|---|---|
+| 1 | **Files in object storage, text and metadata in Postgres.** Don't store PDFs, Word files or images as `bytea` or large objects: they bloat backups, replication logs and memory, and make restores slow. | ✅ Uploaded files are never kept. Only the extracted text (`Article.content`) and `fileName` are saved. |
+| 2 | **Large text in Postgres is fine, with a size cap.** Postgres compresses large text values and stores them apart from the row automatically (TOAST, from about 2 KB). | ✅ Capped at 200,000 characters; the NUL character (which Postgres can't store in text) is stripped or refused before saving. |
+| 3 | **Never load the big column when you don't need it.** Lists and searches select small columns only. | ✅ The Library reads the first 600 characters for excerpts; full text loads only when an article is opened. |
+| 4 | **Keep small, frequent updates cheap.** Update counters and positions without touching indexed columns (so Postgres can update the row in place), or keep them in their own small table. | ⚠️ Reading progress (saved every few seconds) touches only unindexed columns. Opening an article updates the indexed `lastReadAt`, which is slightly more costly. Fine at this scale. |
+| 5 | **Search with the right index.** `ILIKE '%term%'` can't use a normal index; use a trigram index (`pg_trgm`, GIN) for substring search, or full-text search (`tsvector` + GIN) for word search. | ⚠️ Notebook search uses unindexed `ILIKE`: fast for hundreds of concepts per user, slower for thousands. Searching inside article text doesn't exist yet. |
+| 6 | **Isolate users in every query.** Filter by owner in the same query, index owner columns, optionally add row-level security as a second safety net. | ✅ Every query filters by `userId`; `userId` indexes exist on all user tables. Row-level security isn't used (optional). |
+| 7 | **Plan for growth and cleanup.** Decide how long each kind of data lives and delete the rest on a schedule. | ⚠️ `Explanation`, `AiCall` and `LogEntry` grow forever (see §17). |
+| 8 | **Backups you have tested, and complete deletion.** Automated backups with point-in-time recovery; restore at least once; account deletion removes everything. | ✅ Account deletion cascades to all the user's data. ⚠️ Backups depend on the Railway Postgres plan: confirm they're on and test a restore before real users arrive. |
+
+**Next steps, in order of value:**
+
+1. **Scheduled cleanup (practice 7).** For example, weekly:
+   - delete `AiCall` rows older than 90 days;
+   - delete resolved `LogEntry` rows older than 30 days;
+   - delete `Explanation` rows older than 30 days that no `Concept` references.
+
+   Run it from an admin action or a Railway cron job.
+2. **Trigram index for Notebook search (practice 5).** A migration, with the same queries afterwards:
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS pg_trgm;
+   CREATE INDEX concept_term_trgm ON "Concept" USING gin (term gin_trgm_ops);
+   CREATE INDEX concept_definition_trgm ON "Concept" USING gin (definition gin_trgm_ops);
+   ```
+3. **Keeping original files (practice 1), only if users should see the real PDF again.** Upload to object storage
+   (S3, Cloudflare R2, or a Railway bucket or volume) and store `{storageKey, sizeBytes, sha256, mimeType}` on the
+   article. Serve files through short-lived signed links, never a public bucket. Delete the stored file when the
+   article or account is deleted.
+
+**Optional tuning** (only if measurements call for it):
+- Faster compression for article text on Postgres 14+:
+  `ALTER TABLE "Article" ALTER COLUMN content SET COMPRESSION lz4;` (applies to rows written afterwards).
+- Leave room for in-place updates on the article table: `ALTER TABLE "Article" SET (fillfactor = 90);`.
+- Move the reading position into its own small table if article updates ever show up in performance numbers.
+
 ---
 
 ## 6. The AI system
@@ -1154,7 +1196,7 @@ runs the secret scanner automatically (enabled by `npm install` via `core.hooksP
 | Cache, rate limits, daily quota and token budget live in memory | Reset on every deploy/restart; would be per-instance with two servers | Move them to Redis before scaling out |
 | Single server instance assumed | See above | Same |
 | Article import isn't a full "reader mode" | Some sites extract poorly, or not at all if they need JavaScript | The user can paste text instead |
-| No retention policy for `Explanation`, `AiCall`, `LogEntry` | These tables grow forever | Add a scheduled cleanup |
+| No retention policy for `Explanation`, `AiCall`, `LogEntry` | These tables grow forever | Add a scheduled cleanup (plan in §5.1) |
 | No nonce-based Content-Security-Policy (`'unsafe-inline'` scripts allowed) | Weaker protection against injected scripts (no known injection point exists) | Requires dynamic rendering + middleware |
 | Rate limiting by IP relies on Railway setting `x-real-ip` | On another host, set `TRUSTED_IP_HEADER` correctly | – |
 | Password sign-in not offered | Email is required to sign in | By design (D7) |

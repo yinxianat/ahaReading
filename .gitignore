@@ -12,6 +12,8 @@
 # Secrets
 .env
 .env.*
+# Railway production variables (paste into Railway's Raw Editor); holds real secrets.
+.env.railway
 !.env.example
 *.pem
 *.key
