@@ -29,6 +29,9 @@ const securityHeaders = [
 ];
 
 const nextConfig = {
+  // The e2e server builds into its own folder, so it can run beside your `npm run dev`
+  // (Next allows one dev server per build folder). See playwright.config.mjs.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   poweredByHeader: false,
   turbopack: {
     rules: {

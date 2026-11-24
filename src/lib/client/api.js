@@ -65,23 +65,26 @@ function parseRetryAfter(body, response) {
 
 /**
  * @param {string} path same-origin API path, e.g. "/api/articles"
- * @param {{method?:string, body?:any, signal?:AbortSignal, timeoutMs?:number, redirectOn401?:boolean, keepalive?:boolean}} [options]
+ * @param {{method?:string, body?:any, headers?:Object<string,string>, signal?:AbortSignal, timeoutMs?:number, redirectOn401?:boolean, keepalive?:boolean}} [options]
+ *   `body` is sent as JSON, except a Blob/File, which is sent as-is with its own type (uploads).
  * @returns {Promise<any>} parsed JSON, or null for an empty body. Objects served
  *   from the service-worker cache carry a non-enumerable `__fromCache: true`.
  * @throws {ApiError} codes: server codes, plus "offline", "timeout", "aborted", "server_error"
  */
-export async function api(path, { method = "GET", body, signal, timeoutMs = 0, redirectOn401 = true, keepalive } = {}) {
+export async function api(path, { method = "GET", body, headers: extraHeaders, signal, timeoutMs = 0, redirectOn401 = true, keepalive } = {}) {
   const timeoutController = timeoutMs > 0 ? new AbortController() : null;
   const timer = timeoutController ? setTimeout(() => timeoutController.abort("timeout"), timeoutMs) : null;
-  const headers = { Accept: "application/json" };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const isFile = typeof Blob !== "undefined" && body instanceof Blob;
+  const headers = { Accept: "application/json", ...extraHeaders };
+  if (isFile) headers["Content-Type"] = body.type || "application/octet-stream";
+  else if (body !== undefined) headers["Content-Type"] = "application/json";
 
   let response;
   try {
     response = await fetch(path, {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: isFile ? body : body !== undefined ? JSON.stringify(body) : undefined,
       signal: combineSignals([signal, timeoutController?.signal]),
       credentials: "same-origin",
       keepalive,

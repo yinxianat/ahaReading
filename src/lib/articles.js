@@ -1,6 +1,7 @@
 import prisma from "@/lib/db.js";
 import { safeFetch, UrlGuardError } from "@/lib/url-guard.js";
 import { extractReadable, normalizePlainText } from "@/lib/extract.js";
+import { extractDocument } from "@/lib/document-import.js";
 import { articlePlainText, parseArticleBlocks } from "@/lib/article-blocks.js";
 import { MAX_ARTICLE_CHARS, MAX_TITLE_CHARS } from "@/lib/limits.js";
 
@@ -11,13 +12,14 @@ export { MAX_TITLE_CHARS };
 const EXCERPT_CHARS = 240;
 const EXCERPT_READ_CHARS = 600;
 const LIST_LIMIT = 50;
+const DUPLICATE_UPLOAD_WINDOW_MS = 10 * 60_000;
 
 /**
  * Shape returned to the client (with content).
  * @param {object} a Article row
  */
 export function serializeArticle(a) {
-  return { id: a.id, title: a.title, domain: a.domain, url: a.url, content: a.content, createdAt: a.createdAt, lastReadAt: a.lastReadAt };
+  return { id: a.id, title: a.title, domain: a.domain, url: a.url, fileName: a.fileName ?? null, content: a.content, createdAt: a.createdAt, lastReadAt: a.lastReadAt };
 }
 
 function titleFromText(content) {
@@ -42,6 +44,26 @@ export async function createPastedArticle(userId, { text, title }) {
       content: content.slice(0, MAX_CONTENT_CHARS),
     },
   });
+}
+
+/**
+ * Save an uploaded PDF or Word file as a new article. The same file uploaded again
+ * soon after (a retry after a timeout, a double tap) reopens the article it made
+ * instead of adding a duplicate.
+ * @param {string} userId
+ * @param {{bytes: Uint8Array, fileName: string, signal?: AbortSignal}} upload `fileName` already cleaned by the route
+ * @returns {Promise<{article: object, created: boolean}>}
+ * @throws {import("./document-import.js").DocumentImportError}
+ */
+export async function createUploadedArticle(userId, { bytes, fileName, signal }) {
+  const doc = await extractDocument(bytes, { fileName, signal });
+  const data = { fileName: fileName || null, title: doc.title, content: doc.text };
+  const same = await prisma.article.findFirst({
+    where: { userId, url: null, ...data, createdAt: { gte: new Date(Date.now() - DUPLICATE_UPLOAD_WINDOW_MS) } },
+    select: { id: true },
+  });
+  if (same) return { article: await prisma.article.update({ where: { id: same.id }, data: { lastReadAt: new Date() } }), created: false };
+  return { article: await prisma.article.create({ data: { userId, url: null, domain: null, ...data } }), created: true };
 }
 
 /**
@@ -80,11 +102,11 @@ export async function importArticleFromUrl(userId, rawUrl, { fetcher = safeFetch
 /**
  * Recent articles for the Library, without full content.
  * @param {string} userId
- * @returns {Promise<Array<{id, title, domain, url, lastReadAt, conceptCount, excerpt}>>}
+ * @returns {Promise<Array<{id, title, domain, url, fileName, lastReadAt, conceptCount, excerpt}>>}
  */
 export async function listArticles(userId) {
   const rows = await prisma.$queryRaw`
-    SELECT a."id", a."title", a."domain", a."url", a."lastReadAt",
+    SELECT a."id", a."title", a."domain", a."url", a."fileName", a."lastReadAt",
            LEFT(COALESCE(a."content", ''), ${EXCERPT_READ_CHARS}) AS "excerpt",
            (SELECT COUNT(*)::int FROM "Concept" c WHERE c."articleId" = a."id" AND c."userId" = ${userId}) AS "conceptCount"
     FROM "Article" a
@@ -96,6 +118,7 @@ export async function listArticles(userId) {
     title: r.title,
     domain: r.domain,
     url: r.url,
+    fileName: r.fileName ?? null,
     lastReadAt: r.lastReadAt,
     conceptCount: Number(r.conceptCount) || 0,
     excerpt: r.excerpt ? articlePlainText(r.excerpt).replace(/\s+/g, " ").trim().slice(0, EXCERPT_CHARS) : "",

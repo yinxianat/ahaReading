@@ -1,6 +1,6 @@
 "use client";
 /**
- * Library (UX-SPEC 3.5): new reading (paste / import URL) and recent reads.
+ * Library (UX-SPEC 3.5): new reading (paste / import URL / upload a file) and recent reads.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -16,6 +16,7 @@ import Dialog from "@/components/ui/Dialog.js";
 import { Card, EmptyState, ErrorState, Skeleton, SavedCopyNote } from "@/components/ui/Misc.js";
 import Alert from "@/components/ui/Alert.js";
 import { useToast } from "@/components/ui/Toast.js";
+import UploadForm from "./UploadForm.js";
 
 const MAX_TEXT = 200000;
 const DRAFT_KEY = "aha.draft";
@@ -202,8 +203,9 @@ function NewReading() {
         ariaLabel="New reading"
         idPrefix="new"
         tabs={[
-          { id: "paste", label: "Paste text" },
-          { id: "url", label: "Import from URL" },
+          { id: "paste", label: "Paste text", shortLabel: "Paste" },
+          { id: "url", label: "Import from URL", shortLabel: "URL" },
+          { id: "file", label: "Upload file", shortLabel: "File" },
         ]}
         value={tab}
         onChange={(t) => {
@@ -237,6 +239,8 @@ function NewReading() {
             Start reading
           </Button>
         </form>
+      ) : tab === "file" ? (
+        <UploadForm onPasteInstead={pasteInstead} />
       ) : (
         <form id="new-panel-url" role="tabpanel" aria-labelledby="new-url" className="mt-4 space-y-3" onSubmit={onImport} noValidate>
           <TextField
@@ -279,7 +283,7 @@ function NewReading() {
 }
 
 function ArticleCard({ article, now, onDelete }) {
-  const meta = [article.domain || "Pasted text", relativeTime(article.lastReadAt, now), article.conceptCount ? `${article.conceptCount} concept${article.conceptCount === 1 ? "" : "s"}` : null]
+  const meta = [article.domain || article.fileName || "Pasted text", relativeTime(article.lastReadAt, now), article.conceptCount ? `${article.conceptCount} concept${article.conceptCount === 1 ? "" : "s"}` : null]
     .filter(Boolean)
     .join(" · ");
   return (
@@ -354,7 +358,7 @@ function Recent() {
         <ErrorState title="Couldn't load your reading list." error={state.error} onRetry={() => { setState({ status: "loading", articles: [] }); setAttempt((a) => a + 1); }} />
       ) : null}
       {state.status === "ready" && state.articles.length === 0 ? (
-        <EmptyState icon="book" title="Nothing here yet" body="Paste an article above or import a link to start reading." />
+        <EmptyState icon="book" title="Nothing here yet" body="Paste an article above, import a link, or upload a PDF or Word file to start reading." />
       ) : null}
       {state.status === "ready" && state.articles.length > 0 ? (
         <ul className="space-y-3">

@@ -43,6 +43,71 @@ function stripTags(html) {
   return html.replace(/<[^>]*>/g, "");
 }
 
+// Elements whose content is raw text: skipped whole, so code like `a<b ? "x" : y` inside them
+// is never mistaken for a tag.
+const RAW_TEXT_TAGS = new Set(["script", "style", "textarea", "noscript", "template", "xmp", "iframe", "noembed", "noframes"]);
+
+/**
+ * Blank out `<` and `>` inside quoted attribute values, e.g.
+ * `<div data-json="{&#34;text&#34;:&#34;&lt;p>Hi&lt;/p>&#34;}">`. Every later step finds
+ * tags with `<[^>]*>`, which would otherwise end the tag at the first `>` inside the value
+ * and leak the rest of the attribute into the article text. One linear pass.
+ * @param {string} html
+ * @returns {string}
+ */
+export function neutralizeAttributeBrackets(html) {
+  const lower = html.toLowerCase();
+  const out = [];
+  const n = html.length;
+  let i = 0;
+  while (i < n) {
+    const lt = html.indexOf("<", i);
+    if (lt < 0) {
+      out.push(html.slice(i));
+      break;
+    }
+    out.push(html.slice(i, lt));
+    // "<" not followed by a tag-name start is just text ("a < b").
+    if (!/[A-Za-z/!?]/.test(html[lt + 1] || "")) {
+      out.push("<");
+      i = lt + 1;
+      continue;
+    }
+    let j = lt + 1;
+    let quote = null;
+    let lastSignificant = "";
+    let changed = false;
+    const tag = ["<"];
+    for (; j < n; j++) {
+      const c = html[j];
+      if (quote) {
+        if (c === quote) quote = null;
+        if (c === "<" || c === ">") {
+          tag.push(" ");
+          changed = true;
+        } else tag.push(c);
+        continue;
+      }
+      // A quote only opens a value right after "=", so a stray apostrophe can't swallow the page.
+      if ((c === '"' || c === "'") && lastSignificant === "=") quote = c;
+      tag.push(c);
+      if (c === ">") break;
+      if (!/\s/.test(c)) lastSignificant = c;
+    }
+    out.push(changed ? tag.join("") : html.slice(lt, Math.min(j + 1, n)));
+    if (j >= n) break;
+    i = j + 1;
+    const name = (/^<([A-Za-z][A-Za-z0-9-]*)/.exec(html.slice(lt, lt + 40)) || [])[1]?.toLowerCase();
+    if (name && RAW_TEXT_TAGS.has(name) && html[j - 1] !== "/") {
+      const close = lower.indexOf(`</${name}`, i);
+      const end = close < 0 ? n : close;
+      out.push(html.slice(i, end));
+      i = end;
+    }
+  }
+  return out.join("");
+}
+
 // NUL and other C0 controls (except tab/newline) never reach the database.
 function stripControls(text) {
   return String(text).replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
@@ -123,6 +188,7 @@ function toBlock(paragraph, stash) {
 export function extractReadable(html) {
   let doc = String(html || "");
   doc = doc.replace(/<!--[\s\S]*?-->/g, " ").replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, " ").replace(/\uE000/g, "");
+  doc = neutralizeAttributeBrackets(doc);
 
   const title =
     metaContent(doc, "og:title") || firstMatch(doc, /<title\b[^>]*>([\s\S]*?)<\/title>/i) || firstMatch(doc, /<h1\b[^>]*>([\s\S]*?)<\/h1>/i);

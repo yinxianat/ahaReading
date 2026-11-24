@@ -17,13 +17,17 @@ function rove(e, index, count, select) {
 }
 
 /**
- * @param {{tabs:Array<{id:string,label:string,badge?:any}>, value:string, onChange:(id:string) => void, ariaLabel:string, idPrefix?:string}} props
+ * `shortLabel` is shown instead of `label` on phone-width screens (the accessible name stays
+ * `label`); with short labels the tabs share the width equally, so every tab is visible
+ * without sideways scrolling.
+ * @param {{tabs:Array<{id:string,label:string,shortLabel?:string,badge?:any}>, value:string, onChange:(id:string) => void, ariaLabel:string, idPrefix?:string}} props
  */
 export default function Tabs({ tabs, value, onChange, ariaLabel, idPrefix = "tab", className = "" }) {
   const refs = useRef([]);
+  const compact = tabs.some((t) => t.shortLabel);
   return (
     <div className={`scroll-x ${className}`}>
-      <div role="tablist" aria-label={ariaLabel} className="flex min-w-max gap-1 border-b border-border">
+      <div role="tablist" aria-label={ariaLabel} className={`flex gap-1 border-b border-border ${compact ? "w-max min-w-full" : "min-w-max"}`}>
         {tabs.map((t, i) => {
           const selected = t.id === value;
           return (
@@ -37,6 +41,7 @@ export default function Tabs({ tabs, value, onChange, ariaLabel, idPrefix = "tab
               id={`${idPrefix}-${t.id}`}
               aria-selected={selected}
               aria-controls={`${idPrefix}-panel-${t.id}`}
+              aria-label={t.shortLabel ? t.label : undefined}
               tabIndex={selected ? 0 : -1}
               onClick={() => onChange(t.id)}
               onKeyDown={(e) =>
@@ -46,10 +51,19 @@ export default function Tabs({ tabs, value, onChange, ariaLabel, idPrefix = "tab
                 })
               }
               className={`-mb-px inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap border-b-2 px-3 font-semibold ${
+                compact ? "flex-1 justify-center sm:flex-none sm:justify-start" : ""
+              } ${
                 selected ? "border-accent text-accent" : "border-transparent text-muted hover:text-text"
               }`}
             >
-              {t.label}
+              {t.shortLabel ? (
+                <>
+                  <span className="sm:hidden">{t.shortLabel}</span>
+                  <span className="hidden sm:inline">{t.label}</span>
+                </>
+              ) : (
+                t.label
+              )}
               {t.badge != null ? t.badge : null}
             </button>
           );

@@ -113,3 +113,33 @@ describe("[PO-6] pasted text keeps paragraphs and fenced code", () => {
     ]);
   });
 });
+
+describe("attributes that contain markup (CMS data layers)", () => {
+  it("a '>' inside a quoted attribute never leaks the attribute into the text", async () => {
+    const { extractReadable } = await import("@/lib/extract.js");
+    const layer = `{&#34;text-1&#34;:{&#34;xdm:text&#34;:&#34;&lt;p>Kyndryl helps with resilience, agility, innovation and business results.&lt;/p>\\r\\n&#34;}}`;
+    const html = `<html><body><main>
+      <div data-cmp-data-layer="${layer}" class="cmp-text-v2 kd-type--body-medium " id="text-b01845f994">
+        <p>Modernization is becoming a continuous business imperative for every enterprise.</p>
+      </div>
+      <p title='a > b' data-x="1 > 0">Second paragraph with an attribute holding a greater-than sign.</p>
+    </main></body></html>`;
+    const { text } = extractReadable(html);
+    expect(text).toContain("Modernization is becoming a continuous business imperative for every enterprise.");
+    expect(text).toContain("Second paragraph with an attribute holding a greater-than sign.");
+    expect(text).not.toMatch(/class=|id=|&#34;|<\/?p>|data-cmp|\\r\\n|kd-type/);
+  });
+
+  it("scripts with '<' and quotes stay removed; text like 'a < b' survives", async () => {
+    const { extractReadable, neutralizeAttributeBrackets } = await import("@/lib/extract.js");
+    const html = `<body><script>if (a<b && s === "</div><p>leak</p>") x = '>';</script>
+      <p>Latency stays low when a < b and the cache is warm, which keeps reads fast.</p></body>`;
+    const { text } = extractReadable(html);
+    expect(text).toBe("Latency stays low when a < b and the cache is warm, which keeps reads fast.");
+    // Unchanged when there's nothing to fix.
+    const plain = `<p class="x">Hi</p><img alt="cat">`;
+    expect(neutralizeAttributeBrackets(plain)).toBe(plain);
+    // An apostrophe that isn't an attribute value doesn't swallow the document.
+    expect(neutralizeAttributeBrackets(`<p it's>One</p><p>Two</p>`)).toBe(`<p it's>One</p><p>Two</p>`);
+  });
+});

@@ -51,6 +51,13 @@ export default defineConfig({
       AI_MOCK: "1",
       AI_PROVIDER_CHAIN: "mock",
       ADMIN_EMAILS: "qa-admin@example.test",
+      // Own build folder: runs alongside a developer's `npm run dev` on port 3000.
+      NEXT_DIST_DIR: ".next-qa",
+      // Never send real email from tests, whatever .env holds. Settings passed here win over
+      // .env, and with SMTP off the server returns the dev sign-in link the tests use.
+      SMTP_HOST: "",
+      SMTP_USER: "",
+      SMTP_PASS: "",
     },
   },
 });

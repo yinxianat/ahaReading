@@ -15,3 +15,7 @@ export const MAX_TAG_CHARS = 50;
 export const MAX_NOTES_CHARS = 5000;
 export const MAX_DISPLAY_NAME_CHARS = 100;
 export const SIGN_IN_CODE_LENGTH = 6;
+/** Largest PDF or Word file accepted for upload (bytes). */
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+/** File types the Upload tab accepts (extensions, for the file picker and client checks). */
+export const UPLOAD_EXTENSIONS = [".pdf", ".docx"];

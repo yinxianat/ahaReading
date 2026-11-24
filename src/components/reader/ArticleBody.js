@@ -6,7 +6,7 @@
  * selection offsets in selection.js work the same for every kind. Content is
  * rendered as React text only — never HTML.
  */
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 const WORD = /[\p{L}\p{N}]/u;
 
@@ -101,16 +101,53 @@ function Inline({ index, text, marks, active, tap, onConceptOpen }) {
 const HEADING_TAG = { 1: "h2", 2: "h3", 3: "h4" };
 const HEADING_CLASS = { h2: "mt-8 mb-3 text-[1.3em] leading-snug font-semibold", h3: "mt-7 mb-3 text-[1.15em] leading-snug font-semibold", h4: "mt-6 mb-2 text-[1.05em] font-semibold" };
 
+/**
+ * Verbatim, monospace code that scrolls sideways inside the block — never the page.
+ * Long lines are easy to miss (macOS hides scrollbars), so while there's more to the
+ * right the edge fades out and a hint says so.
+ */
+function CodeBlock({ index, children }) {
+  const ref = useRef(null);
+  const [overflow, setOverflow] = useState({ wide: false, atEnd: true });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const check = () => {
+      const wide = el.scrollWidth > el.clientWidth + 1;
+      setOverflow({ wide, atEnd: !wide || el.scrollLeft + el.clientWidth >= el.scrollWidth - 4 });
+    };
+    check();
+    el.addEventListener("scroll", check, { passive: true });
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(check) : null;
+    observer?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", check);
+      observer?.disconnect();
+    };
+  }, []);
+  return (
+    <div className="mb-6">
+      <div className="relative">
+        <pre ref={ref} data-p={index} className="article-code max-w-full overflow-x-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-[0.8em] leading-relaxed whitespace-pre" tabIndex={0} aria-label="Code block">
+          <code>{children}</code>
+        </pre>
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-y-px right-px w-10 rounded-r-md bg-gradient-to-l from-surface-2 to-transparent transition-opacity duration-[var(--dur)] ${overflow.atEnd ? "opacity-0" : "opacity-100"}`}
+        />
+      </div>
+      {overflow.wide ? (
+        <p aria-hidden="true" className="mt-1 font-sans text-[13px] text-muted">
+          {overflow.atEnd ? "← Scroll back to the start of the lines" : "Scroll sideways to see the full lines →"}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 const Block = memo(function Block({ index, block, marks, active, tap, onConceptOpen }) {
   const inline = <Inline index={index} text={block.text} marks={marks} active={active} tap={tap} onConceptOpen={onConceptOpen} />;
-  if (block.type === "code") {
-    // Verbatim, monospace, scrolls sideways inside the block — never the page.
-    return (
-      <pre data-p={index} className="article-code mb-6 max-w-full overflow-x-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-[0.8em] leading-relaxed whitespace-pre" tabIndex={0} aria-label="Code block">
-        <code>{inline}</code>
-      </pre>
-    );
-  }
+  if (block.type === "code") return <CodeBlock index={index}>{inline}</CodeBlock>;
   if (block.type === "h") {
     const Tag = HEADING_TAG[block.level] || "h3";
     return (

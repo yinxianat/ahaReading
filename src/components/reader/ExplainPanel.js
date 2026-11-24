@@ -199,18 +199,22 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
   const explanationId = current.status === "ready" ? current.data?.explanationId : null;
   const translation = explanationId ? translations[explanationId] : null;
 
+  // Compact header (label + phrase beside the close button) so a phone's bottom sheet
+  // keeps most of its height for the explanation itself.
   const header = (
     <div className="px-4 pt-1">
-      <div className="flex items-center justify-between">
-        <p className="text-[12px] font-semibold tracking-[.04em] text-muted uppercase">Explaining</p>
-        <IconButton icon="x" label="Close explanation" onClick={() => onClose()} />
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 pt-1.5">
+          <p className="text-[12px] font-semibold tracking-[.04em] text-muted uppercase">Explaining</p>
+          <p className={`font-reading text-[19px] leading-snug break-anywhere ${termOpen ? "" : "line-clamp-2"}`}>{snapshot.highlightedText}</p>
+          {snapshot.highlightedText.length > 80 ? (
+            <button type="button" className="min-h-[32px] text-[14px] font-semibold text-accent" onClick={() => setTermOpen((o) => !o)} aria-expanded={termOpen}>
+              {termOpen ? "less" : "more"}
+            </button>
+          ) : null}
+        </div>
+        <IconButton icon="x" label="Close explanation" className="-mr-2 flex-none" onClick={() => onClose()} />
       </div>
-      <p className={`font-reading text-[20px] leading-snug break-anywhere ${termOpen ? "" : "line-clamp-3"}`}>{snapshot.highlightedText}</p>
-      {snapshot.highlightedText.length > 120 ? (
-        <button type="button" className="min-h-[36px] text-[14px] font-semibold text-accent" onClick={() => setTermOpen((o) => !o)} aria-expanded={termOpen}>
-          {termOpen ? "less" : "more"}
-        </button>
-      ) : null}
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
         <LevelStepper level={level} fetchedLevels={fetchedLevels} reachableBelow={highest} onSelect={selectLevel} disabled={!online} />
         <Segmented
@@ -245,23 +249,22 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
     // footer's room goes to the form and the explanation (QA-5).
     footer = null;
   } else {
+    // One row of actions (wraps on very narrow screens), so the explanation gets the height.
     footer = (
-      <div className="space-y-2">
+      <div className="flex flex-wrap gap-2">
         {!saveOpen ? (
-          <Button variant="tertiary" icon="bookmark" fullWidth onClick={openSave} disabled={!online}>
-            Save to Notebook
+          <Button variant="tertiary" icon="bookmark" className="flex-none" onClick={openSave} disabled={!online} aria-label="Save to Notebook">
+            Save
           </Button>
         ) : null}
-        <div className="flex flex-col gap-2 min-[360px]:flex-row">
-          {level < 3 ? (
-            <Button variant="secondary" className="min-[360px]:order-first min-[360px]:flex-1" onClick={escalate} disabled={!online}>
-              Still confused
-            </Button>
-          ) : null}
-          <Button className="order-first min-[360px]:order-last min-[360px]:flex-1" onClick={() => onClose()}>
-            Got it
+        {level < 3 ? (
+          <Button variant="secondary" className="min-w-[136px] flex-1 whitespace-nowrap" onClick={escalate} disabled={!online}>
+            Still confused
           </Button>
-        </div>
+        ) : null}
+        <Button className="min-w-[96px] flex-1 whitespace-nowrap" onClick={() => onClose()}>
+          Got it
+        </Button>
       </div>
     );
   }
@@ -271,8 +274,9 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
       open
       onClose={() => onClose()}
       desktop="side"
-      modal
-      scrimCollapses
+      // Not modal: the article stays readable and scrollable behind the sheet, so the
+      // surrounding text is always one scroll away.
+      modal={false}
       title="Explanation"
       header={header}
       footer={footer}

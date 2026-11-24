@@ -57,6 +57,7 @@ model Article {
   url        String? // source URL, null for pasted text
   title      String?
   domain     String?
+  fileName   String? // original name of an uploaded PDF/Word file; null for pasted text and links
   content    String? // the readable text the user is reading (capped on write)
   lastReadAt DateTime @default(now())
   createdAt  DateTime @default(now())

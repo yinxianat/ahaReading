@@ -218,8 +218,21 @@ test.describe("admin", () => {
       const r = await page.request.get(`/api/admin/${p}`);
       expect(r.status(), p).toBe(200);
       const body = await r.text();
-      expect(body, p).not.toMatch(/JWT_SECRET=|MAGIC_LINK_SECRET=|at .*\.js:\d+/);
+      // Secrets never appear, anywhere (the logger redacts every detail before storing it).
+      expect(body, p).not.toMatch(/JWT_SECRET=|MAGIC_LINK_SECRET=/);
+      // Stack frames are allowed only inside a stored log entry's detail: admin-only
+      // diagnostics, redacted, and the first thing an operator needs for a 500. Every other
+      // admin field (counts, users, findings, metrics) must be frame-free.
+      const json = JSON.parse(body);
+      const withoutLogDetail = JSON.stringify(json, (key, value) => (key === "detail" || key === "firstDetail" ? undefined : value));
+      expect(withoutLogDetail, p).not.toMatch(/\bat [^"\\]{0,200}?\.js:\d+/);
     }
+    // Users never get a stack: a non-admin is refused before any log data is read.
+    const anon = await page.context().browser().newContext();
+    const refused = await anon.request.get(new URL("/api/admin/logs", page.url()).href);
+    expect(refused.status()).toBe(401);
+    expect(await refused.text()).not.toMatch(/\bat [^"\\]{0,200}?\.js:\d+/);
+    await anon.close();
     expect(issues.filter((i) => !/favicon/.test(i))).toEqual([]);
   });
 });

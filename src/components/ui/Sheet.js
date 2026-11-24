@@ -2,13 +2,58 @@
 /**
  * Mobile bottom sheet that becomes a right side panel (or centred dialog) at
  * ≥1024px. Bottom sheet: drag handle toggles snap heights, drag down past 30%
- * closes, Esc closes, focus is trapped while modal.
+ * closes, Esc closes, focus is trapped while modal. A non-modal sheet leaves the
+ * page behind it usable (no scrim): focus moves into it but isn't trapped.
+ * Scrolling bodies keep a visible scrollbar and fade out at the bottom while
+ * there is more to read, so it is obvious the content continues.
  */
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useIsDesktop } from "@/lib/client/hooks.js";
 import { focusables, trapTab } from "./focus.js";
 import { IconButton } from "./Button.js";
+
+/**
+ * Scrollable body with an always-visible scrollbar and a bottom fade while more
+ * content is below.
+ * @param {{children:any, className?:string}} props
+ */
+function ScrollBody({ children, className = "" }) {
+  const ref = useRef(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const check = () => setMore(el.scrollHeight - el.scrollTop - el.clientHeight > 8);
+    check();
+    el.addEventListener("scroll", check, { passive: true });
+    // Content grows when an explanation loads or a form opens; the box changes with the sheet height.
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(check) : null;
+    observer?.observe(el);
+    for (const child of el.children) observer?.observe(child);
+    const mutations = typeof MutationObserver === "function" ? new MutationObserver(() => {
+      for (const child of el.children) observer?.observe(child);
+      check();
+    }) : null;
+    mutations?.observe(el, { childList: true });
+    return () => {
+      el.removeEventListener("scroll", check);
+      observer?.disconnect();
+      mutations?.disconnect();
+    };
+  }, []);
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={ref} className={`scroll-visible min-h-0 flex-1 overflow-y-auto ${className}`}>
+        {children}
+      </div>
+      <div
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-surface to-transparent transition-opacity duration-[var(--dur)] ${more ? "opacity-100" : "opacity-0"}`}
+      />
+    </div>
+  );
+}
 
 /**
  * @param {object} props
@@ -69,6 +114,9 @@ export default function Sheet({
     if (trapping && panel.current) {
       const first = focusables(panel.current)[0];
       (first || panel.current).focus();
+    } else if (!side && panel.current) {
+      // Non-modal sheet: put keyboard/screen-reader users in it without trapping them.
+      panel.current.focus({ preventScroll: true });
     }
     const onKey = (e) => {
       if (e.key === "Escape") {
@@ -81,7 +129,7 @@ export default function Sheet({
       document.removeEventListener("keydown", onKey);
       if (restoreFocus && trigger && typeof trigger.focus === "function" && document.contains(trigger)) trigger.focus();
     };
-  }, [open, trapping, restoreFocus]);
+  }, [open, trapping, restoreFocus, side]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -104,7 +152,7 @@ export default function Sheet({
         style={{ top: topOffset }}
       >
         {heading}
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">{children}</div>
+        <ScrollBody className="px-4 pb-4">{children}</ScrollBody>
         {footer ? <div className="border-t border-border bg-surface px-4 py-3">{footer}</div> : null}
       </aside>
     );
@@ -124,7 +172,7 @@ export default function Sheet({
           className="anim-pop relative flex max-h-[85vh] w-full max-w-[520px] flex-col rounded-lg bg-surface py-3 shadow-2"
         >
           {heading}
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">{children}</div>
+          <ScrollBody className="px-4 pb-2">{children}</ScrollBody>
           {footer ? <div className="border-t border-border px-4 pt-3">{footer}</div> : null}
         </div>
       </div>,
@@ -197,7 +245,7 @@ export default function Sheet({
           <span className="h-1 w-9 rounded-full bg-border" />
         </button>
         {heading}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">{children}</div>
+        <ScrollBody className="overscroll-contain px-4 pb-4">{children}</ScrollBody>
         {footer ? <div className="border-t border-border bg-surface px-4 pt-3 safe-bottom" style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom))" }}>{footer}</div> : null}
         {!footer ? <div className="safe-bottom" /> : null}
       </div>

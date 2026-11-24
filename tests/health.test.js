@@ -157,4 +157,19 @@ describe("GET /api/health", () => {
     expect(body.checks.smtp).toBe("ok");
     expect(Object.keys(body).sort()).toEqual(["checks", "fatal", "status", "timestamp", "warnings"]);
   });
+
+  it("[QA4-10] production: admin detail needs a session the database still accepts", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.ADMIN_EMAILS = "admin@example.test";
+    const { createSessionToken, SESSION_COOKIE } = await import("@/lib/auth.js");
+    const admin = { id: "u-admin", email: "admin@example.test", locale: "en", helpLevel: 1, displayName: null, onboardedAt: null, sessionVersion: 0 };
+    const token = await createSessionToken(admin);
+    const asAdmin = async () => (await GET(new Request("http://localhost/api/health", { headers: { cookie: `${SESSION_COOKIE}=${token}` } }))).json();
+
+    prisma.user.findUnique.mockResolvedValue(admin);
+    expect((await asAdmin()).checks.ai).toEqual(["anthropic"]);
+    // "Sign out of all devices" bumped the version: the old cookie is just anonymous now.
+    prisma.user.findUnique.mockResolvedValue({ ...admin, sessionVersion: 1 });
+    expect((await asAdmin()).checks.ai).toBe("ok");
+  });
 });

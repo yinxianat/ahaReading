@@ -23,7 +23,7 @@ export const AI_CLIENT_TIMEOUT_MS = 35000;
 
 /**
  * @param {{code?:string, message?:string, retryAfter?:number|null}} err an ApiError
- * @param {"explain"|"translate"|"save"|"login"|"code"|"articles"|"import"|"form"|"load"|"settings"|"review"} context
+ * @param {"explain"|"translate"|"save"|"login"|"code"|"articles"|"import"|"upload"|"form"|"load"|"settings"|"review"} context
  * @returns {ErrorView}
  */
 export function describeError(err, context = "load") {
@@ -40,7 +40,7 @@ export function describeError(err, context = "load") {
       if (context === "login") {
         return { tone: "warning", message: "Too many sign-in requests. Try again in {countdown}.", retryAfter, waitForOnline: false, recovery: "retry", countdownFormat: "mmss" };
       }
-      if (context === "articles" || context === "import") {
+      if (context === "articles" || context === "import" || context === "upload") {
         return { tone: "warning", message: "You've added a lot of articles in a minute. Try again in {countdown}.", retryAfter, waitForOnline: false, recovery: "retry" };
       }
       return { tone: "warning", message: "You're going a bit fast. You can try again in {countdown}.", retryAfter, waitForOnline: false, recovery: "retry" };
@@ -125,6 +125,18 @@ export function describeError(err, context = "load") {
         return { tone: "danger", message: serverMessage || "That selection can't be explained. Select a shorter phrase.", retryAfter: null, waitForOnline: false, recovery: "pick_text" };
       }
       return { tone: "danger", message: serverMessage || "Check what you entered and try again.", retryAfter: null, waitForOnline: false, recovery: "none" };
+    case "upload_in_progress":
+      return { tone: "warning", message: "Another file is still uploading. Wait for it to finish, then try again.", retryAfter: err?.retryAfter || 5, waitForOnline: false, recovery: "retry" };
+    case "server_busy":
+      return { tone: "warning", message: "We're reading a lot of files right now. Try again in {countdown}.", retryAfter: err?.retryAfter || 10, waitForOnline: false, recovery: "retry" };
+    case "upload_interrupted":
+      return { tone: "warning", message: serverMessage || "The upload stopped before the whole file arrived. Check your connection and try again.", retryAfter: null, waitForOnline: false, recovery: "retry" };
+    case "file_unsupported":
+      return { tone: "danger", message: serverMessage || "We can read PDF and Word (.docx) files. For anything else, paste the text instead.", retryAfter: null, waitForOnline: false, recovery: "paste_instead" };
+    case "file_too_large":
+      return { tone: "danger", message: serverMessage || "That file is too large. Upload a smaller file, or paste the part you want to read.", retryAfter: null, waitForOnline: false, recovery: "paste_instead" };
+    case "file_unreadable":
+      return { tone: "danger", message: serverMessage || "We couldn't read the text in that file. Paste the text instead.", retryAfter: null, waitForOnline: false, recovery: "paste_instead" };
     case "url_blocked":
       return { tone: "danger", message: serverMessage || "That address can't be imported. Use a public http or https link.", retryAfter: null, waitForOnline: false, recovery: "paste_instead" };
     case "url_unreachable":

@@ -231,6 +231,25 @@ export default function Reader({ id }) {
     else toast({ message: "Select one word or term" });
   }, [isDesktop, toast]);
 
+  // Keep the passage being explained in view: beside the side panel on desktop, or in
+  // the strip above the bottom sheet on phones (the sheet starts at 55% height).
+  const activeKey = active?.key;
+  useEffect(() => {
+    if (!activeKey) return undefined;
+    const timer = setTimeout(() => {
+      const mark = bodyRef.current?.querySelector("mark.active");
+      if (!mark) return;
+      const rect = mark.getBoundingClientRect();
+      const topLimit = 64; // under the sticky top bar
+      const bottomLimit = isDesktop ? window.innerHeight - 24 : window.innerHeight * 0.45 - 16;
+      if (rect.top >= topLimit && rect.bottom <= bottomLimit) return;
+      const target = isDesktop ? window.innerHeight * 0.3 : Math.max(topLimit + 8, bottomLimit - rect.height - 72);
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      window.scrollBy({ top: rect.top - target, behavior: reduce ? "auto" : "smooth" });
+    }, 280); // after the panel's slide-in and the column's padding transition
+    return () => clearTimeout(timer);
+  }, [activeKey, isDesktop]);
+
   useEffect(() => {
     const onKey = (e) => {
       if (e.altKey && e.key === "Enter" && pending && !active) {
@@ -326,8 +345,14 @@ export default function Reader({ id }) {
   return (
     <>
       <TopBar title={a?.title || ""} size={sizeKey} setSize={setSizeKey} coarse={coarse} tapMode={tapMode} setTapMode={setTapMode} />
-      <div className={`transition-[padding] duration-[var(--dur)] ${panelOpen ? "xl:pr-[420px]" : ""}`}>
-        <main id="main" className="mx-auto max-w-[68ch] px-4 pt-6 md:px-6" style={{ paddingBottom: "calc(120px + env(safe-area-inset-bottom))" }}>
+      {/* The side panel (≥1024px) takes 420px on the right: the text moves over so it is never covered. */}
+      <div className={`transition-[padding] duration-[var(--dur)] ${panelOpen ? "lg:pr-[420px]" : ""}`}>
+        <main
+          id="main"
+          className="mx-auto max-w-[68ch] px-4 pt-6 md:px-6"
+          // With the bottom sheet open, room below the text lets its last lines scroll up above the sheet.
+          style={{ paddingBottom: panelOpen && !isDesktop ? "calc(60dvh + env(safe-area-inset-bottom))" : "calc(120px + env(safe-area-inset-bottom))" }}
+        >
           {article.status === "loading" ? (
             <div>
               <Skeleton variant="block" height={30} className="mb-3 w-4/5" />
@@ -338,7 +363,7 @@ export default function Reader({ id }) {
             <article>
               <h1 className="text-[24px] leading-[1.3] font-semibold break-anywhere">{a?.title || "Untitled"}</h1>
               <p className="mt-1 mb-6 text-[14px] text-muted break-anywhere">
-                {[a?.domain || "Pasted text", a?.createdAt ? `Imported ${formatDate(a.createdAt)}` : null].filter(Boolean).join(" · ")}
+                {[a?.domain || a?.fileName || "Pasted text", a?.createdAt ? `${a?.fileName ? "Uploaded" : "Imported"} ${formatDate(a.createdAt)}` : null].filter(Boolean).join(" · ")}
                 {a?.url ? (
                   <>
                     {" · "}

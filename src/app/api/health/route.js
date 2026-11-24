@@ -3,7 +3,7 @@ import { isProduction, secretProblem } from "@/lib/env.js";
 import { baseUrlProblem } from "@/lib/base-url.js";
 import { smtpState } from "@/lib/mailer.js";
 import { getConfigFindings, loadChainStatus, HEALTH_IMPACT } from "@/lib/diagnostics.js";
-import { getSession, isAdminEmail } from "@/lib/auth.js";
+import { getSession, isAdminEmail, requireAdmin } from "@/lib/auth.js";
 import { alertError } from "@/lib/alerts.js";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +35,11 @@ async function wantsDetail(request) {
   if (!isProduction()) return true;
   try {
     const session = request ? await getSession(request) : null;
-    return Boolean(session && isAdminEmail(session.email));
+    if (!session || !isAdminEmail(session.email)) return false;
+    // The token alone isn't enough: "Sign out of all devices" and account deletion revoke
+    // it in the database. One read, and only for a caller whose token claims an admin.
+    const admin = await requireAdmin(request);
+    return !admin.response;
   } catch {
     return false;
   }

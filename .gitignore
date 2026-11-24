@@ -23,6 +23,7 @@
 # Dependencies / build / generated
 /node_modules/
 /.next/
+/.next-qa/
 /out/
 /build/
 /coverage/

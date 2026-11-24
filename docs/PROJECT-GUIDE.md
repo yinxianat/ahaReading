@@ -34,7 +34,8 @@ For installing and running the project, see the [README](../README.md).
 
 ## 1. The project in one page
 
-**What it is.** A reading tutor for technical text. The user pastes an article (or imports it from a link), selects
+**What it is.** A reading tutor for technical text. The user pastes an article (or imports it from a link, or uploads a
+PDF or Word file), selects
 something they don't understand, and taps **I don't understand**. The AI explains it at one of three levels:
 
 | Level | Name | Style | Length limit |
@@ -113,7 +114,7 @@ Each choice below was made on purpose. If you're tempted to change one, read its
 |---|---|---|---|
 | D1 | **One Next.js app** for pages and API | One deploy, one codebase, one language | Server and browser code sit side by side; keep `src/lib/client/**` browser-only |
 | D2 | **JavaScript, not TypeScript** | Simpler for a solo developer; JSDoc comments document types instead | No compiler to catch type mistakes; tests do that job |
-| D3 | **Paste text or import a link** (not "highlight on any website") | A web app can't read text on other websites. A browser extension would be a separate product | The user copies text into AhaReading |
+| D3 | **Paste text, import a link or upload a file** (not "highlight on any website") | A web app can't read text on other websites. A browser extension would be a separate product | The user brings the text into AhaReading |
 | D4 | **AI provider chain** (several providers, tried in order) | One provider's outage doesn't take the app down | More keys to manage; answers vary slightly by provider |
 | D5 | **Refusal stops the chain**; only outages fail over | If one AI declines content on its merits, asking another is "shopping for a yes" | A false refusal is shown to the user rather than retried elsewhere |
 | D6 | **Mock AI provider** for development and tests | Develop and test with no AI account, no cost and predictable text | Must never run in production, so it is hard-disabled there |
@@ -131,6 +132,8 @@ Each choice below was made on purpose. If you're tempted to change one, read its
 | D18 | **No AI SDKs, plain `fetch` to each provider** | One small adapter per provider, all shaped the same, no vendor libraries | You update request formats by hand when an API changes |
 | D19 | **Secrets read lazily, fail closed** | `next build` works without secrets; a missing secret refuses sign-ins instead of falling back to a known value | A missing secret only shows up when someone tries to sign in (health check catches it) |
 | D20 | **Next.js `next start`, not "standalone" build** | Simplest deployment on Railway | Slightly larger deploy |
+| D21 | **Uploads are converted to text on the server; the file itself is not kept** | Same safe plain-text reading view for every source; nothing to store or scan later | The original layout (columns, images, tables) is lost; to re-read the original, the user keeps their own copy |
+| D22 | **Upload sends the raw file, not a multipart form** | A file type like `application/pdf` can't be sent cross-site without a browser preflight, so other sites can't forge uploads; and the server can stop reading at the size cap | The client sets the type and the `X-File-Name` header itself |
 
 ---
 
@@ -159,9 +162,87 @@ Each feature lists what the user sees, how it works, and its files. "UI" means `
   blocks. The draft is saved on the device (`aha.draft`) so a reload or a forced sign-in doesn't lose it.
 - **Import tab**: paste a link. The server fetches it safely (see §9) and extracts the readable text: it keeps
   headings, lists and code, and drops menus, scripts and footers.
+- **Upload file tab**: choose (or, on desktop, drag in) a **PDF** or **Word .docx** file up to **10 MB**. The server
+  turns it into the same block text as everything else and the article opens in the reader. The Library and reader
+  show the file name where a link would show its website. Details in §4.2.1.
 - Delete an article with an undo window.
-- UI: `library/Library.js`. API: `GET/POST /api/articles`, `GET/DELETE /api/articles/:id`. Logic: `lib/articles.js`,
-  `lib/extract.js`, `lib/url-guard.js`, `lib/article-blocks.js`.
+- UI: `library/Library.js`, `library/UploadForm.js`. API: `GET/POST /api/articles`, `POST /api/articles/upload`,
+  `GET/DELETE /api/articles/:id`. Logic: `lib/articles.js`, `lib/extract.js`, `lib/url-guard.js`,
+  `lib/document-import.js` (checks), `lib/document-sandbox.js` + `lib/document-worker.mjs` (the parse worker),
+  `lib/document-parse.js` (PDF/Word parsing), `lib/article-blocks.js`.
+
+#### 4.2.1 How an uploaded file becomes an article
+
+1. **In the browser** (`UploadForm.js`), obvious problems are caught before uploading: the wrong extension, an empty
+   file, over 10 MB, or an old `.doc`. The file is sent as the raw request body with its type (or
+   `application/octet-stream` when the browser labels it oddly, e.g. a .docx as `application/zip`) and an
+   `X-File-Name` header. A file dropped anywhere on the page while the Upload tab is open is picked up (it never
+   replaces the app). Switching tabs or leaving the page mid-upload cancels the upload.
+2. **The route** (`api/articles/upload/route.js`) checks the session, the rate limit (shared with adding articles:
+   20/min) and the content type, refuses a declared size over 10 MB, then reads the body **and stops the moment it
+   passes 10 MB**. A body that stalls for 20 s or takes over 2 minutes in total, or a client that disconnects,
+   ends with a quiet `400 upload_interrupted` (a WARN log line, never an ERROR or an alert). Only one upload per user
+   runs at a time (`429 upload_in_progress`). The file name is cleaned (no folders, no control, invisible or
+   bidi-override characters, at most 200 whole characters).
+3. **The importer** (`lib/document-import.js`) decides the type from the file's **first bytes**, never its name:
+
+   | First bytes | Treated as |
+   |---|---|
+   | `%PDF-` (anywhere in the first 1 KB) | PDF |
+   | `PK` (a zip) containing `word/document.xml` | Word .docx |
+   | A zip without it (e.g. Excel, PowerPoint) | Refused: "isn't a Word document" |
+   | Old Office format (`.doc`) or `{\rtf` | Refused, with "save it as .docx or PDF" |
+   | Anything else | Refused |
+
+4. **Word files**: before anything is decompressed, the zip's table of contents is read to check the total
+   unpacked size (max 40 MB), the size of `word/document.xml` (max 6 MB; a 300-page document is 2-4 MB) and the
+   file count (max 5,000). This fails obvious *zip bombs* (tiny files that unpack to gigabytes) at once. A zip whose
+   table of contents lies about sizes fails when unpacking (JSZip checks the real size).
+5. **Parsing runs in a worker thread** (`lib/document-sandbox.js` starts `lib/document-worker.mjs`), never on the
+   server's main thread, because a small file can still expand into gigabytes inside a parser: a 16 KB .docx with
+   millions of tiny paragraphs, or a 1.5 MB PDF whose compressed stream decodes to 1.5 GB. Each upload gets a fresh
+   worker with:
+
+   | Guard | Limit | When exceeded |
+   |---|---|---|
+   | JavaScript heap (`resourceLimits`) | 256 MB old + 32 MB young generation | `413 file_too_large` ("needs more memory to read than we allow") |
+   | Decoded data outside the heap (PDF streams), polled every 25 ms | 192 MB | Worker killed, `413 file_too_large` |
+   | Wall clock | 20 s hard; PDFs stop reading pages at 14 s and keep what they have | Worker killed, `422 file_unreadable` ("took too long") |
+   | Parses at once, per server process | 2; up to 4 more wait up to 15 s | `503 server_busy` with `retryAfter: 10` |
+
+   The main thread only copies the bytes and waits, so other requests stay fast (measured: `/api/health` under 40 ms
+   while the QA attack files are parsed). The worker gets no environment variables. The worker file is loaded from
+   disk at runtime (`process.cwd()/src/lib/document-worker.mjs`), not bundled; this works with `next dev` and
+   `next start` from the project folder (Railway). A standalone build would need that file and `node_modules`
+   copied next to it.
+6. **Word conversion**: `mammoth` converts the document to simple HTML (images skipped; Word's *Title* style becomes
+   the title, *Subtitle* a paragraph; footnotes lose their "↑" back-link), and the same extractor used for link
+   imports turns that into headings, lists and paragraphs.
+7. **PDFs**: `unpdf` (a packaging of Mozilla's pdf.js) reads the text with script evaluation and font loading
+   turned off, up to 500 pages, page by page as a stream, stopping once it has more text than an article can hold
+   (200,000 characters) or 100,000 text pieces on one page. CJK look-alike characters that some PDF fonts produce
+   (Kangxi radicals such as "⽂" for "文", compatibility ideographs, ﬁ/ﬂ ligatures) are folded to the normal
+   characters, so search and duplicate checks work; nothing else is normalised. A PDF has no paragraphs, only
+   positioned lines of text, so structure is rebuilt:
+
+   | Rule | How |
+   |---|---|
+   | Paragraphs | A vertical gap bigger than ~1.6 lines starts a new one |
+   | Headings | Text at least 25% larger than the body text (the size with the most characters); 60% larger is a top-level heading |
+   | Lists | Lines starting with a bullet (•, -, ➢, ✓, 1., a) …, and the Symbol/Wingdings glyphs Word's PDF export uses) form a list; an unbulleted line right after is that item wrapping. Bullets drawn as shapes (Chrome's "Save as PDF") aren't seen |
+   | Headers, footers, page numbers | A short line (≤ 60 characters) repeated at the top or bottom of at least 3 pages and half of all pages is dropped (numbers ignored), as are lines like "12" or "Page 3 of 9" |
+   | Hyphenation | "conver-" at a line end + "sation" becomes "conversation" |
+   | Page breaks | A sentence that runs over a page break is joined |
+
+8. **Title**: the PDF's own title (unless it's junk like "Microsoft Word - draft.docx"), else the document's opening
+   heading, else the file name without its extension. If the opening heading became the title, it's removed from the
+   text so it doesn't appear twice.
+9. Less than 50 characters of text means there's nothing to read, which usually means a **scanned PDF** (pictures of
+   pages). The user is told so and pointed to Paste text. Password-protected and damaged files get their own
+   messages.
+10. The article is saved with `fileName` set and `url`/`domain` empty. **The uploaded file is not kept.** The same
+    file (same name and text) uploaded again within 10 minutes reopens the article it made (`200`) instead of
+    adding a duplicate, so a retry after a timeout is safe.
 
 ### 4.3 Reader and the explain loop (`/read/:id`)
 
@@ -171,8 +252,17 @@ Each feature lists what the user sees, how it works, and its files. "UI" means `
   appears at the bottom. A "tap a sentence" mode selects a whole sentence with one tap, which is handy on phones.
   Selections over 1,000 characters are refused with a hint to choose less. UI: `reader/SelectionUI.js`,
   `reader/useArticleSelection.js`. Logic: `lib/client/selection.js`.
-- **Explain panel** (side panel on desktop, bottom sheet on phone): shows the level-1 explanation (or the user's
-  default level). The buttons are:
+- **Explain panel** (side panel on screens 1024 px and wider, bottom sheet on smaller ones): shows the level-1
+  explanation (or the user's default level). It never hides the text being explained:
+  - **Side panel:** the article column moves left to make room (`lg:pr-[420px]` in `Reader.js`), so the text is
+    never underneath the panel.
+  - **Bottom sheet:** it's **not modal**: no dimming, and the article stays scrollable and readable behind it. The
+    selected phrase scrolls into the strip above the sheet, and extra space below the text lets the last lines
+    scroll up too. Drag the handle (or tap it) to make the sheet taller.
+  - The panel body keeps a visible scrollbar and fades at the bottom when there's more to read (`ScrollBody` in
+    `ui/Sheet.js`).
+
+  The actions sit in one row: **Save**, **Still confused**, **Got it**. More detail:
   - **Still confused?** moves up a level. After level 3 it suggests selecting a smaller phrase.
   - **Simpler, please** moves down a level.
   - **Level stepper**: jump straight to any level. Levels already fetched show instantly.
@@ -181,6 +271,8 @@ Each feature lists what the user sees, how it works, and its files. "UI" means `
   
   The loading text depends on the level ("Thinking…", "Finding an analogy…", "Digging deeper…"). On a long wait it
   adds "Still working — trying a backup. This can take up to 30 seconds." The client gives up after 35 seconds. UI: `reader/ExplainPanel.js`, `reader/LevelStepper.js`, `reader/SaveConceptForm.js`.
+- **Code blocks** scroll sideways inside their box, never the page; while a line runs past the edge, the right
+  edge fades and a hint reads "Scroll sideways to see the full lines →" (`CodeBlock` in `ArticleBody.js`).
 - **Saved-concept marks**: phrases already saved from this article are underlined; tapping one opens its concept.
 - Text size can be adjusted, and the setting is remembered (`aha.readSize`).
 
@@ -280,7 +372,7 @@ concepts but unlinks them.
 |---|---|---|
 | **User** | An account | `email` (unique), `locale` ("en"/"zh"), `helpLevel` (1–3), `onboardedAt` (null until onboarding is done), `sessionVersion` (bumped by "sign out of all devices") |
 | **MagicToken** | One sign-in email | `tokenHash` (an HMAC of the link token; the token itself is never stored), `codeHash` (HMAC of the 6-digit code), `attempts` (wrong codes, locks at 5), `next` (where to go after sign-in), `consumed`, `expiresAt` (15 minutes) |
-| **Article** | Something the user is reading | `content` (block text, capped at 200,000 chars), `url`/`domain` (null for pasted), `lastReadAt` |
+| **Article** | Something the user is reading | `content` (block text, capped at 200,000 chars), `url`/`domain` (only for link imports), `fileName` (only for uploads), `lastReadAt` |
 | **Explanation** | One AI explanation shown to the user | `highlightedText`, `surroundingText`, `helpLevel`, `language`, `explanation`, `translationZh`, `aiProvider`, `aiModel`, `aiTokensUsed`, `aiLatencyMs`, `cacheHit` |
 | **Concept** | A Notebook entry | `term`, `definition`, `definitionZh`, `userNotes`, `tags[]`, plus scheduling fields `nextReviewAt`, `interval`, `easeFactor`, `repetitions`, `reviewCount`, `lastReviewedAt` |
 | **ReviewCard** | One rating of a concept (history) | `quality` 0–5, `clientId` (unique per user, makes offline re-sends harmless), `reviewedAt` |
@@ -514,6 +606,12 @@ never shows a raw crash.
 | 400 | `url_blocked` | Import link points to a private/internal address or bad port | Explains why, offers *Paste text instead* |
 | 400 | `url_unreachable` | Import site didn't answer / timed out / too many redirects | *Try again* / *Paste text instead* |
 | 400 | `url_not_readable` | Not an HTML/text page, too big, or no readable text | *Paste text instead* |
+| 400 | `upload_interrupted` | The upload body stopped arriving (connection lost, stalled 20 s, or over 2 minutes) | "Check your connection" + *Try again* |
+| 413 | `file_too_large` | Upload over 10 MB, a Word file that unpacks to too much, or a file that needs more memory to parse than the worker allows | *Paste text instead* |
+| 415 | `file_unsupported` | Not a PDF or .docx (incl. old `.doc`, `.rtf`, Excel), or a non-file content type | Names the fix (e.g. save as .docx); *Paste text instead* |
+| 422 | `file_unreadable` | Scanned PDF (no text), password-protected, damaged, or took too long (20 s) | Names the cause; *Paste text instead* |
+| 429 | `upload_in_progress` | This user already has an upload in flight (`retryAfter: 5`) | "Another file is still uploading" + countdown |
+| 503 | `server_busy` | Too many documents being parsed at once on this server (`retryAfter: 10`) | "We're reading a lot of files right now" + countdown |
 | 401 | `unauthenticated` | No/expired/revoked session | Redirect to sign-in with "Your session ended" |
 | 403 | `forbidden` | Not an admin, or a cross-site request | "Operators only" page / blocked notice |
 | 404 | `not_found` | Item doesn't exist **or isn't yours** (same answer, so ids can't be probed) | "Not found" page with a way back |
@@ -545,7 +643,9 @@ never shows a raw crash.
   the same code read differently in different places.
 - **`components/ui/ErrorAlert.js`** renders that description: the message (with a live countdown when there's a wait),
   and the recovery buttons. The *Try again* button stays disabled until the countdown ends or the network returns.
-  Screen readers hear the whole message once rather than every second.
+  Screen readers hear the whole message once (through the alert's `role="alert"` only), rather than every second;
+  that spoken copy says "a few seconds" instead of a number that would be stale a moment later, and the countdown
+  announces "You can try again now" when it ends.
 - **Crashes in the page itself:**
 
   | Where it crashes | What catches it |
@@ -582,6 +682,8 @@ never shows a raw crash.
 | Prompt injection ("ignore previous instructions") | Rules first in the system message; untrusted text fenced in the user message; invisible characters stripped; output validated | `ai/safety.js`, `ai/*-prompt.js` |
 | Server fetching internal addresses via article import (SSRF) | See below | `url-guard.js` |
 | Malicious HTML in imported articles | Never stored or rendered as HTML; plain text blocks only | `extract.js`, `article-blocks.js`, `ArticleBody.js` |
+| Malicious or huge uploaded files | 10 MB cap enforced while reading; stalled bodies cut off; type from the file's bytes; zip size checks before unpacking; parsing in a worker with heap, external-memory and time limits and a per-process cap on parses (§4.2.1); PDF script evaluation and font loading off; output is plain text; the file isn't stored | `api/articles/upload/route.js`, `upload-body.js`, `document-import.js`, `document-sandbox.js` |
+| Forged uploads from other websites | Raw-file body with a file content type (needs a browser preflight cross-site); text/form types refused; plus SameSite cookie and the cross-site check | `api/articles/upload/route.js`, `http.js` |
 | Secrets in logs | Everything logged passes through `redact()` (masks keys, tokens, emails) | `redact.js` |
 | Secrets committed to git | Pre-commit scan (`.githooks/`) and the same scan inside `npm test` | `scripts/check-secrets.mjs` |
 | Rate-limit bypass by faking IP headers | Uses the IP header Railway sets (`x-real-ip`), else the *rightmost* forwarded hop | `http.js` (`clientIp`) |
@@ -683,7 +785,9 @@ Railway calls this after every deploy.
 | **200 "degraded"** | It works but something is missing: no AI provider, or email not set up or failing |
 | **200 "ok"** | Everything is configured |
 
-It lists problems by **name only**, never values. In production, anonymous callers get a less detailed version.
+It lists problems by **name only**, never values. In production, anonymous callers get a less detailed version;
+the detailed one needs an admin session the database still accepts (a cookie revoked by "Sign out of all devices"
+gets the anonymous view).
 
 ### 11.4 Diagnostics (`lib/diagnostics.js`)
 
@@ -723,7 +827,7 @@ Page files are tiny: each just renders a component from `src/components/`.
 | `app/` | App shell: `AuthGuard` (session gate), `AppShell`, `Nav` (with due badge), `TopBar`, `OfflineBanner` (+ queue sync), `ServiceWorker`, `UserContext` (current user), `DueContext` (due count) |
 | `auth/` | `LoginClient`, `CodeEntry`, `VerifyClient`, `AuthCard` |
 | `onboarding/` | `Onboarding` |
-| `library/` | `Library` (list, paste, import) |
+| `library/` | `Library` (list, paste, import), `UploadForm` (the Upload file tab) |
 | `reader/` | `Reader` (screen), `ArticleBody` (renders blocks), `SelectionUI` + `useArticleSelection` (selection), `ExplainPanel`, `LevelStepper`, `ExplanationText`, `SaveConceptForm` |
 | `notebook/` | `Notebook` (list + filters), `ConceptCard`, `ConceptDetail` |
 | `review/` | `Review` (session + stats line), `Flashcard` (+ rating bar) |
@@ -755,6 +859,12 @@ Page files are tiny: each just renders a component from `src/components/`.
 | `articles.js` | Create/list articles (paste or import) |
 | `url-guard.js` | Safe fetching of imported links (§9) |
 | `extract.js` | HTML → readable block text |
+| `document-import.js` | Uploaded PDF/.docx → readable block text: type detection, zip size checks, then the worker, then title and text checks |
+| `document-sandbox.js` | Runs a parse in a resource-limited worker thread; global concurrency gate (§4.2.1) |
+| `document-worker.mjs` | The worker entry (plain Node, not bundled: relative imports only) |
+| `document-parse.js` | PDF and Word parsing and PDF layout rebuilding; runs only inside the worker |
+| `document-shared.js` | `DocumentImportError` and the invisible-character pattern, shared by both sides |
+| `upload-body.js` | Reads an upload body with the size cap and stall limits |
 | `article-blocks.js` | Reads and writes the block text format (headings, lists, code, paragraphs) |
 | `concepts.js` | Concept input checks, API shape, duplicate-term key |
 | `srs.js` | SM-2 scheduling, streak, mastered threshold (§4.5.1) |
@@ -808,8 +918,9 @@ admin.
 | 🔒 `GET /api/auth/me` | – | `{user:{id,email,displayName,locale,helpLevel,onboardedAt,isAdmin}}` | – |
 | 🔒 `PATCH /api/me` | `{displayName?, locale?, helpLevel?, onboarded?}` | `{user}` | 30/min |
 | 🔒 `DELETE /api/me` | `{confirm:"DELETE"}` | `{ok}` | – |
-| 🔒 `GET /api/articles` | – | `{articles:[{id,title,domain,url,lastReadAt,conceptCount,excerpt}]}` | – |
+| 🔒 `GET /api/articles` | – | `{articles:[{id,title,domain,url,fileName,lastReadAt,conceptCount,excerpt}]}` | – |
 | 🔒 `POST /api/articles` | `{text, title?}` or `{url}` | 201 `{article}` | 20/min; one import at a time |
+| 🔒 `POST /api/articles/upload` | Raw file body; `Content-Type` = file type; `X-File-Name` = `encodeURIComponent(name)` | 201 `{article}` (with `fileName`), or 200 for the same file again within 10 min | 20/min (shared with articles); one upload at a time per user; 2 parses at once per server |
 | 🔒 `GET / DELETE /api/articles/:id` | – | `{article}` (with content) / `{ok}` | – |
 | 🔒 `POST /api/explain` | `{highlightedText, surroundingText?, helpLevel?, language?, articleId?}` | `{explanationId, explanation, helpLevel, language, cached, provider, model}` | 30/min + daily quota |
 | 🔒 `POST /api/translate` | `{explanationId}` | `{translation, language:"zh", cached}` | 20/min + daily quota |
@@ -830,6 +941,7 @@ admin.
 | Highlight | 1,000 chars |
 | Surrounding text | 3,000 chars (longer is trimmed, not rejected) |
 | Article | 200,000 chars |
+| Uploaded file | 10 MB (`MAX_UPLOAD_BYTES`); PDF: first 500 pages; .docx: 40 MB unpacked, `word/document.xml` 6 MB; parse worker: 256 MB heap, 192 MB other memory, 20 s |
 | Title | 200 chars |
 | URL | 2,000 chars |
 | Term | 200 chars |
@@ -845,7 +957,7 @@ admin.
 | Kind | Command | Where | What it covers |
 |---|---|---|---|
 | Unit + API | `npm test` | `tests/*.test.js` (Vitest) | Library logic and every route, against the `ahareading_test` database (or with a fake database for some suites). Includes the secret scan and "every env var the code reads is in `.env.example`" |
-| End-to-end | `npm run test:e2e` | `e2e/*.spec.mjs` (Playwright) | Real browsers: desktop Chrome, phone-sized Chrome and Safari engine. Uses port 3100, the `ahareading_qa` database and the mock AI |
+| End-to-end | `npm run test:e2e` | `e2e/*.spec.mjs` (Playwright) | Real browsers: desktop Chrome, phone-sized Chrome and Safari engine. Uses port 3100, the `ahareading_qa` database, the mock AI, SMTP switched off and its own build folder `.next-qa`, so it runs beside `npm run dev` |
 | Lint | `npm run lint` | – | Common code mistakes |
 
 Some conventions:
@@ -854,6 +966,10 @@ Some conventions:
   ENG = engineering, PO = product. Don't delete or weaken them; if one fails, the behavior it protects has broken.
 - **The test database guard**: tests refuse to run unless `TEST_DATABASE_URL` is set, differs from `DATABASE_URL`
   and names a `*_test` database. This protects your real data.
+- **Document fixtures**: `tests/fixtures/documents.js` builds real PDF and .docx files in code (`makePdf`, `makeDocx`,
+  and the hostile `makeDenseDocx` / `makeFlateBombPdf`), so no binary test files are committed. Document tests run
+  the real parse worker; `tests/fixtures/workers/` holds stand-in workers that hang or crash, for the sandbox tests. Keep PDF fixture lines under ~85 characters: pdf.js drops text that runs
+  off the page.
 - **E2E helpers**:
   - `e2e/support/fixtures.mjs` gives each test a fresh signed-in `user`, gives each browser project its own fake IP
     so rate limits don't collide, and provides helpers like `createArticle` and `explainPhrase`.
@@ -919,6 +1035,18 @@ longer answers, raise `EXPLAIN_MAX_TOKENS` and check the length bounds in `valid
 message.
 
 **Change a limit** (highlight length, tags, etc.). Edit `src/lib/limits.js`; both the server and the forms read it.
+The upload size is `MAX_UPLOAD_BYTES` there; zip limits are at the top of `src/lib/document-import.js`, the PDF page
+cap in `document-parse.js`, and the worker's memory, time and concurrency limits in `document-sandbox.js`.
+
+**An uploaded PDF reads badly** (merged paragraphs, missing headings, leftover headers). The rules are in
+`linesToBlocks` and `dropPageFurniture` in `src/lib/document-parse.js` (§4.2.1). Reproduce it with `makePdf` in
+`tests/document-import.test.js`, adjust the rule, and keep the existing tests passing. Multi-column PDFs and tables
+are the usual trouble cases.
+
+**Support another file type** (e.g. EPUB). Add its signature to `detectKind` and let it through in
+`extractDocument` (`document-import.js`), an `extractX` function returning `{title, text}` in block format and a
+branch in `parseDocument` (`document-parse.js`, worker side: relative imports only), its extension to `UPLOAD_EXTENSIONS` in `limits.js`,
+its MIME type to `ACCEPTED_TYPES` in the upload route, and tests.
 
 **Change a rate limit.** Search for `checkRateLimit(` in `src/app/api/`. Each call names its `maxRequests` and
 `windowMs`. The per-user daily AI quota is `AI_DAILY_LIMIT_PER_USER`.
@@ -959,7 +1087,9 @@ add it to `HEALTH_IMPACT` if it should affect `/api/health`.
 
 **Investigate a user-reported problem.**
 
-1. Open the admin **Errors** tab. Look for a recent entry, its count and its details.
+1. Open the admin **Errors** tab. Look for a recent entry, its count and its details. A server error's details
+   include the first 6 lines of its stack trace (redacted like every log detail). Stacks are operator-only data:
+   no user-facing response ever contains one.
 2. Open **AI Calls** if it's about explanations, to see which provider failed and why.
 3. Open **Infrastructure** for configuration problems.
 4. Check `/api/health`.
@@ -981,9 +1111,16 @@ runs the secret scanner automatically (enabled by `npm install` via `core.hooksP
 | No nonce-based Content-Security-Policy (`'unsafe-inline'` scripts allowed) | Weaker protection against injected scripts (no known injection point exists) | Requires dynamic rendering + middleware |
 | Rate limiting by IP relies on Railway setting `x-real-ip` | On another host, set `TRUSTED_IP_HEADER` correctly | – |
 | Password sign-in not offered | Email is required to sign in | By design (D7) |
+| Scanned PDFs can't be read | No text layer; the user must paste the text | Add OCR (heavy; better as a separate service) |
+| PDF structure is rebuilt by heuristics | Multi-column layouts, tables and footnotes may read out of order | Tune `linesToBlocks`; tables would need a real layout engine |
+| Old `.doc`, `.rtf`, `.odt`, EPUB not supported | The user is told to re-save as .docx or PDF | Add an extractor (see playbook) |
+| At most 2 documents parse at once per server | A burst of uploads waits up to 15 s, then gets "try again in a few seconds" | Raise `MAX_CONCURRENT_PARSES` with more memory (each parse can use ~0.5 GB) |
+| Upload parse memory is released lazily | After a burst of large or hostile uploads, the process keeps a few hundred MB more RSS for a while (allocator, not a leak; measured plateau ~0.6-0.8 GB) | Size the instance for ~1 GB peak |
+| Word tables come out one cell per paragraph; nested lists are flattened | Readable but loses layout | A richer mammoth style map / table support |
+| PDF bullets drawn as shapes (Chrome "Save as PDF") aren't detected | Those list items merge into one paragraph | An x-indent heuristic (needs item positions kept) |
 | Streak and "reviewed today" use UTC days | A day boundary may not match the user's midnight | Use the user's timezone |
 | Cost figures are estimates | They may drift from real billing | Compare with the provider dashboard |
-| Only one `next dev` per folder | Can't run the dev server and e2e tests at the same time | Stop one first |
+| One `next dev` per build folder | e2e runs beside your `npm run dev` only because it builds into `.next-qa` (`NEXT_DIST_DIR`, see `playwright.config.mjs`) | For a production check beside dev, also build into another folder: `NEXT_DIST_DIR=.next-qa npx next build` (plain `npm run build` rewrites `.next` and `src/generated/prisma` under the running dev server) |
 
 ---
 
@@ -1020,3 +1157,5 @@ runs the secret scanner automatically (enabled by `npm install` via `core.hooksP
 | **Fatal vs. degraded** | Health states: can't work (503) versus works with something missing (200) |
 | **E2E test** | "End-to-end": a test that drives a real browser through the app |
 | **Redaction** | Masking secrets and emails before anything is logged |
+| **Zip bomb** | A tiny compressed file that unpacks to an enormous size; .docx files are zips, so they're checked first |
+| **pdf.js / unpdf / mammoth** | Libraries that read PDF files (Mozilla's pdf.js, packaged by unpdf) and Word files (mammoth) |

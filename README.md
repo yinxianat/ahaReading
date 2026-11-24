@@ -28,7 +28,7 @@ It runs in a web browser on a laptop or a phone, and it can be installed on your
 
 | Feature | What you see |
 |---|---|
-| **Read** | Paste text or import an article from a web address. Your articles are saved in a Library. |
+| **Read** | Paste text, import an article from a web address, or upload a PDF or Word (.docx) file. Your articles are saved in a Library. |
 | **Explain, three levels** | Select text and tap *I don't understand*. Level 1 is a simple explanation. Level 2 uses an analogy or example. Level 3 is a detailed breakdown. You can move between levels at any time. |
 | **Chinese translation** | Any explanation can be translated into Mandarin Chinese. |
 | **Notebook** | Save an explained word or phrase as a "concept", with your own notes and tags. You can search and filter it. |
@@ -219,7 +219,7 @@ The same link is also printed in the terminal where `npm run dev` is running.
 ### A quick tour
 
 1. Sign in, and choose your language and starting help level.
-2. On **Read**, paste a few paragraphs of any technical text and open it.
+2. On **Read**, paste a few paragraphs of any technical text (or upload a PDF or Word file) and open it.
 3. Select a word or phrase, then tap **I don't understand**. Tap **Still confused?** to go up a level, and the
    **EN / 中文** switch for Chinese.
 4. Tap **Save to Notebook** to keep the concept.
@@ -270,8 +270,8 @@ npm run test:e2e
   `QA_DATABASE_URL="postgresql://$(whoami)@localhost:5432/ahareading_qa" npm run test:e2e`
 - If a test fails, look in `e2e/.results/` for screenshots, and run `npx playwright show-report e2e/.report` for a
   full report.
-- Only one development server can run in the project at a time. **Stop `npm run dev` (Ctrl + C) before running
-  the browser tests.**
+- They can run while your own `npm run dev` is running: the test server builds into its own folder (`.next-qa`)
+  and has email (SMTP) switched off, so no real emails are sent.
 
 ### Code style check
 
@@ -289,7 +289,7 @@ npm run lint
 | `npm test` | Run the unit and API tests |
 | `npm run test:e2e` | Run the browser tests |
 | `npm run lint` | Check the code for common mistakes |
-| `npm run build` then `npm run start` | Build and run the production version locally |
+| `npm run build` then `npm run start` | Build and run the production version locally (stop `npm run dev` first: the build rewrites `.next` and the database client). To try a production build beside a running dev server, use `NEXT_DIST_DIR=.next-qa npx next build` and `NEXT_DIST_DIR=.next-qa npx next start -p 3200` |
 | `npm run db:deploy` | Apply any new database changes |
 | `npm run db:migrate` | *(Developers changing the database design)* Create a new database change after editing `prisma/schema.prisma` |
 | `npm run check:secrets` | Scan the project for accidentally included passwords or keys |
