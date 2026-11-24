@@ -417,3 +417,36 @@
 .article-body .article-code code {
   font-family: inherit;
 }
+
+/* Bookmarked blocks in the reader: a coloured edge in the margin, text unmoved. */
+.article-body .bm {
+  box-shadow: inset 3px 0 0 var(--bm-edge);
+  margin-left: -0.875rem;
+  padding-left: 0.875rem;
+  border-radius: 2px;
+}
+.article-body .bm-revisit {
+  --bm-edge: var(--accent);
+}
+.article-body .bm-important {
+  --bm-edge: var(--warning);
+}
+/* A block the reader jumped to (bookmark / continue reading) glows briefly. */
+.article-body .flash {
+  animation: aha-flash 1.6s var(--ease, ease) 1;
+}
+@keyframes aha-flash {
+  0%, 30% {
+    background-color: var(--accent-soft);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .article-body .flash {
+    animation: none;
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+  }
+}

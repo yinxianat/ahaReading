@@ -19,3 +19,9 @@ export const SIGN_IN_CODE_LENGTH = 6;
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 /** File types the Upload tab accepts (extensions, for the file picker and client checks). */
 export const UPLOAD_EXTENSIONS = [".pdf", ".docx"];
+/** Bookmarks: note length, how much of the marked text is kept, and a per-article ceiling. */
+export const MAX_BOOKMARK_NOTE_CHARS = 2000;
+export const MAX_BOOKMARK_QUOTE_CHARS = 300;
+export const MAX_BOOKMARKS_PER_ARTICLE = 300;
+/** Bookmark kinds: re-visit later, or important. */
+export const BOOKMARK_KINDS = ["revisit", "important"];

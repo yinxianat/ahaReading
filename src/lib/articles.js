@@ -4,6 +4,7 @@ import { extractReadable, normalizePlainText } from "@/lib/extract.js";
 import { extractDocument } from "@/lib/document-import.js";
 import { articlePlainText, parseArticleBlocks } from "@/lib/article-blocks.js";
 import { MAX_ARTICLE_CHARS, MAX_TITLE_CHARS } from "@/lib/limits.js";
+import { badRequest, hasNul } from "@/lib/http.js";
 
 /** Article content is capped on write; it is stored in the article-blocks.js format. */
 export const MAX_CONTENT_CHARS = MAX_ARTICLE_CHARS;
@@ -19,13 +20,62 @@ const DUPLICATE_UPLOAD_WINDOW_MS = 10 * 60_000;
  * @param {object} a Article row
  */
 export function serializeArticle(a) {
-  return { id: a.id, title: a.title, domain: a.domain, url: a.url, fileName: a.fileName ?? null, content: a.content, createdAt: a.createdAt, lastReadAt: a.lastReadAt };
+  return { id: a.id, title: a.title, domain: a.domain, url: a.url, fileName: a.fileName ?? null, content: a.content, createdAt: a.createdAt, lastReadAt: a.lastReadAt, readBlock: a.readBlock ?? null, readPercent: a.readPercent ?? 0 };
 }
 
 function titleFromText(content) {
   const first = parseArticleBlocks(content.slice(0, 2000)).find((b) => b.type !== "code");
   const line = (first?.type === "list" ? first.items[0] : first?.text) || "Untitled";
   return line.length > 80 ? `${line.slice(0, 77).trimEnd()}…` : line;
+}
+
+/**
+ * Validate article text (pasted or edited): non-empty, NUL-free, within the cap.
+ * @param {unknown} text
+ * @returns {{text: string} | {error: Response}}
+ */
+export function parseArticleText(text) {
+  if (typeof text !== "string" || !text.trim()) return { error: badRequest("Paste the text you want to read.", "text") };
+  if (hasNul(text)) return { error: badRequest("Your text contains a hidden NUL character. Copy it again from the source, or retype the affected part.", "text") };
+  if (text.length > MAX_CONTENT_CHARS) {
+    return { error: badRequest(`That's too long to save — use up to ${MAX_CONTENT_CHARS.toLocaleString("en-US")} characters.`, "text") };
+  }
+  return { text };
+}
+
+/**
+ * Validate an optional title: text, NUL-free, ≤ MAX_TITLE_CHARS. Blank → null (one is made from the text).
+ * @param {unknown} title
+ * @returns {{title: string|null} | {error: Response}}
+ */
+export function parseArticleTitle(title) {
+  if (title === undefined || title === null) return { title: null };
+  if (typeof title !== "string") return { error: badRequest("The title must be text.", "title") };
+  if (hasNul(title)) return { error: badRequest("The title contains a hidden character. Retype it and try again.", "title") };
+  const clean = title.trim().replace(/\s+/g, " ");
+  if (clean.length > MAX_TITLE_CHARS) return { error: badRequest(`Keep the title to ${MAX_TITLE_CHARS} characters or fewer.`, "title") };
+  return { title: clean || null };
+}
+
+/**
+ * Change one of the user's articles. Edited text is normalised like pasted text (blank-line
+ * paragraphs, fenced code kept), so headings/lists written as "## …" / "- …" still render.
+ * Saved concepts stay linked; their highlights are found again by term in the new text.
+ * @param {string} userId
+ * @param {string} id
+ * @param {{title?: string|null, text?: string}} changes already validated; a key that is absent is unchanged
+ * @returns {Promise<object|null>} the updated article, or null when it isn't the user's
+ */
+export async function updateArticle(userId, id, changes) {
+  const data = {};
+  if (changes.text !== undefined) data.content = normalizePlainText(changes.text).text.slice(0, MAX_CONTENT_CHARS);
+  if (changes.title !== undefined) {
+    const content = data.content ?? (await prisma.article.findFirst({ where: { id, userId }, select: { content: true } }))?.content ?? "";
+    data.title = (changes.title || titleFromText(content)).slice(0, MAX_TITLE_CHARS);
+  }
+  const { count } = await prisma.article.updateMany({ where: { id, userId }, data });
+  if (count === 0) return null;
+  return prisma.article.findFirst({ where: { id, userId } });
 }
 
 /**
@@ -102,11 +152,11 @@ export async function importArticleFromUrl(userId, rawUrl, { fetcher = safeFetch
 /**
  * Recent articles for the Library, without full content.
  * @param {string} userId
- * @returns {Promise<Array<{id, title, domain, url, fileName, lastReadAt, conceptCount, excerpt}>>}
+ * @returns {Promise<Array<{id, title, domain, url, fileName, lastReadAt, readPercent, conceptCount, excerpt}>>}
  */
 export async function listArticles(userId) {
   const rows = await prisma.$queryRaw`
-    SELECT a."id", a."title", a."domain", a."url", a."fileName", a."lastReadAt",
+    SELECT a."id", a."title", a."domain", a."url", a."fileName", a."lastReadAt", a."readPercent",
            LEFT(COALESCE(a."content", ''), ${EXCERPT_READ_CHARS}) AS "excerpt",
            (SELECT COUNT(*)::int FROM "Concept" c WHERE c."articleId" = a."id" AND c."userId" = ${userId}) AS "conceptCount"
     FROM "Article" a
@@ -119,6 +169,7 @@ export async function listArticles(userId) {
     domain: r.domain,
     url: r.url,
     fileName: r.fileName ?? null,
+    readPercent: Number(r.readPercent) || 0,
     lastReadAt: r.lastReadAt,
     conceptCount: Number(r.conceptCount) || 0,
     excerpt: r.excerpt ? articlePlainText(r.excerpt).replace(/\s+/g, " ").trim().slice(0, EXCERPT_CHARS) : "",

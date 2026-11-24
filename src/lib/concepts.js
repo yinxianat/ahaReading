@@ -56,6 +56,21 @@ export function parseTerm(value) {
 }
 
 /**
+ * Validate a definition (string, NUL-free, 1..MAX_DEFINITION_CHARS after trimming).
+ * @param {unknown} value
+ * @returns {{definition: string} | {error: Response}}
+ */
+export function parseDefinition(value) {
+  if (typeof value !== "string" || !value.trim()) return { error: badRequest("The definition can't be empty.", "definition") };
+  if (hasNul(value)) return { error: badRequest("The definition contains a hidden character. Retype it and try again.", "definition") };
+  const definition = value.trim();
+  if (definition.length > MAX_DEFINITION_CHARS) {
+    return { error: badRequest(`Keep the definition to ${MAX_DEFINITION_CHARS.toLocaleString("en-US")} characters or fewer.`, "definition") };
+  }
+  return { definition };
+}
+
+/**
  * Normalize one tag (trim, lowercase, collapse whitespace). Empty → "".
  * @param {string} tag
  */

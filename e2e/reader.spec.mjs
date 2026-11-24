@@ -56,7 +56,7 @@ test.describe("library", () => {
     await page.goto("/read");
     await page.getByRole("button", { name: "Delete “Delete me”" }).click();
     const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("Concepts you saved from it stay in your Notebook.");
+    await expect(dialog).toContainText("Concepts you saved from it stay in your Notebook; its bookmarks are deleted.");
     await dialog.getByRole("button", { name: "Delete" }).click();
     await expect(page.locator("p", { hasText: "Article deleted." })).toBeVisible();
     await expect(page.getByText("Nothing here yet")).toBeVisible();

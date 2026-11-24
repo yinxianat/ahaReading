@@ -2,7 +2,7 @@
  *
  * - App shell + offline page precached.
  * - /_next/static/*: cache-first (content-hashed, immutable).
- * - GET /api/notebook*, /api/review, /api/articles*: network-first, cached
+ * - GET /api/notebook*, /api/review, /api/articles*, /api/bookmarks: network-first, cached
  *   copy when offline or when the server answers 5xx (database down, PO-12),
  *   marked with x-aha-from-cache: 1. The page wipes these caches on sign-out,
  *   on a 401 and when a different user signs in (SEC-3, local-data.js).
@@ -11,7 +11,7 @@
  * - Navigations: network-first; signed-in app pages fall back to their last
  *   cached copy, everything else to /offline.html.
  */
-const VERSION = "v2";
+const VERSION = "v3";
 const SHELL = `aha-shell-${VERSION}`;
 const STATIC = `aha-static-${VERSION}`;
 const API = `aha-api-${VERSION}`;
@@ -26,9 +26,9 @@ const PRECACHE = [
   "/icons/apple-touch-icon.png",
 ];
 
-const API_CACHEABLE = [/^\/api\/notebook(\/|$)/, /^\/api\/review$/, /^\/api\/articles(\/|$)/];
+const API_CACHEABLE = [/^\/api\/notebook(\/|$)/, /^\/api\/review$/, /^\/api\/articles(\/|$)/, /^\/api\/bookmarks$/];
 const API_NEVER = [/^\/api\/auth(\/|$)/, /^\/api\/explain/, /^\/api\/translate/, /^\/api\/health/, /^\/api\/admin(\/|$)/, /^\/api\/client-error/, /^\/api\/me(\/|$)/];
-const APP_PAGES = [/^\/read(\/|$)/, /^\/notebook(\/|$)/, /^\/review$/, /^\/settings$/];
+const APP_PAGES = [/^\/read(\/|$)/, /^\/notebook(\/|$)/, /^\/bookmarks$/, /^\/review$/, /^\/settings$/];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

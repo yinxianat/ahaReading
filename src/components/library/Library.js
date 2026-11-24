@@ -282,23 +282,34 @@ function NewReading() {
   );
 }
 
-function ArticleCard({ article, now, onDelete }) {
-  const meta = [article.domain || article.fileName || "Pasted text", relativeTime(article.lastReadAt, now), article.conceptCount ? `${article.conceptCount} concept${article.conceptCount === 1 ? "" : "s"}` : null]
+function ArticleCard({ article, now, onDelete, onEdit }) {
+  const name = article.title || "Untitled";
+  const read = article.readPercent || 0;
+  const meta = [article.domain || article.fileName || "Pasted text", relativeTime(article.lastReadAt, now), read >= 97 ? "Finished" : read > 0 ? `${read}% read` : null, article.conceptCount ? `${article.conceptCount} concept${article.conceptCount === 1 ? "" : "s"}` : null]
     .filter(Boolean)
     .join(" · ");
   return (
     <li className="relative">
-      <Card href={`/read/${article.id}`} className="pr-14">
+      <Card href={`/read/${article.id}`} className="pr-24">
         <p className="line-clamp-2 font-semibold break-anywhere">{article.title || "Untitled"}</p>
         <p className="mt-1 truncate text-[14px] text-muted">{meta}</p>
         {article.excerpt ? <p className="mt-2 line-clamp-2 text-[15px] text-muted break-anywhere">{article.excerpt}</p> : null}
+        {read > 0 ? (
+          <div className="mt-3 h-1 overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-label="Reading progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={read}>
+            <div className="h-full rounded-full bg-accent" style={{ width: `${Math.max(3, read)}%` }} />
+          </div>
+        ) : null}
       </Card>
-      <IconButton icon="trash" label={`Delete “${article.title || "Untitled"}”`} className="absolute top-2 right-2 text-muted" onClick={() => onDelete(article)} />
+      <div className="absolute top-2 right-2 flex">
+        <IconButton icon="pencil" label={`Edit “${name}”`} className="text-muted" onClick={() => onEdit(article)} />
+        <IconButton icon="trash" label={`Delete “${name}”`} className="text-muted" onClick={() => onDelete(article)} />
+      </div>
     </li>
   );
 }
 
 function Recent() {
+  const router = useRouter();
   const [state, setState] = useState({ status: "loading", articles: [], fromCache: false });
   const [now, setNow] = useState(0);
   const [attempt, setAttempt] = useState(0);
@@ -363,7 +374,13 @@ function Recent() {
       {state.status === "ready" && state.articles.length > 0 ? (
         <ul className="space-y-3">
           {state.articles.map((a) => (
-            <ArticleCard key={a.id} article={a} now={now} onDelete={(article) => { setDeleteError(null); setConfirm(article); }} />
+            <ArticleCard
+              key={a.id}
+              article={a}
+              now={now}
+              onEdit={(article) => router.push(`/read/${encodeURIComponent(article.id)}/edit`)}
+              onDelete={(article) => { setDeleteError(null); setConfirm(article); }}
+            />
           ))}
         </ul>
       ) : null}
@@ -372,7 +389,7 @@ function Recent() {
         open={Boolean(confirm)}
         onClose={() => !deleting && setConfirm(null)}
         title={`Delete “${confirm?.title || "Untitled"}”?`}
-        description="Concepts you saved from it stay in your Notebook."
+        description="Concepts you saved from it stay in your Notebook; its bookmarks are deleted."
         initialFocusRef={cancelRef}
         actions={
           <>

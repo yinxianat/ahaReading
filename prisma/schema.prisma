@@ -26,6 +26,7 @@ model User {
   reviewCards  ReviewCard[]
   articles     Article[]
   explanations Explanation[]
+  bookmarks    Bookmark[]
 }
 
 // ─── Auth ───────────────────────────────────────────
@@ -51,19 +52,22 @@ model MagicToken {
 // ─── Articles ───────────────────────────────────────
 
 model Article {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  url        String? // source URL, null for pasted text
-  title      String?
-  domain     String?
-  fileName   String? // original name of an uploaded PDF/Word file; null for pasted text and links
-  content    String? // the readable text the user is reading (capped on write)
-  lastReadAt DateTime @default(now())
-  createdAt  DateTime @default(now())
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url         String? // source URL, null for pasted text
+  title       String?
+  domain      String?
+  fileName    String? // original name of an uploaded PDF/Word file; null for pasted text and links
+  readBlock   Int? // block index the reader last stopped at (reading progress); null = not started
+  readPercent Int      @default(0) // 0..100, how far down the article the reader got
+  content     String? // the readable text the user is reading (capped on write)
+  lastReadAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
 
   concepts     Concept[]
   explanations Explanation[]
+  bookmarks    Bookmark[]
 
   @@unique([userId, url])
   @@index([userId, lastReadAt])
@@ -142,6 +146,25 @@ model Concept {
   reviewCards ReviewCard[]
 
   @@index([userId, nextReviewAt])
+  @@index([userId, createdAt])
+  @@index([userId, articleId])
+}
+
+// ─── Bookmarks ──────────────────────────────────────
+// A spot in an article the reader marked to re-visit or as important, with an optional note.
+model Bookmark {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  articleId  String
+  article    Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  blockIndex Int // index of the article block ([data-p]) when it was marked
+  quote      String // the marked text (≤300 chars); finds the spot again if the article is edited
+  kind       String // "revisit" | "important"
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
   @@index([userId, createdAt])
   @@index([userId, articleId])
 }

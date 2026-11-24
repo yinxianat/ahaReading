@@ -165,8 +165,12 @@ Each feature lists what the user sees, how it works, and its files. "UI" means `
 - **Upload file tab**: choose (or, on desktop, drag in) a **PDF** or **Word .docx** file up to **10 MB**. The server
   turns it into the same block text as everything else and the article opens in the reader. The Library and reader
   show the file name where a link would show its website. Details in §4.2.1.
-- Delete an article with an undo window.
-- UI: `library/Library.js`, `library/UploadForm.js`. API: `GET/POST /api/articles`, `POST /api/articles/upload`,
+- **Edit** an article (pencil on its Library card, or **Edit** under the title in the reader → `/read/[id]/edit`):
+  rename it, change its text (shown in the block format: blank line = paragraph, `## ` heading, `- ` bullet,
+  ``` code), or delete it. Unsaved changes are guarded; a session that expires mid-edit keeps a draft. Saved
+  concepts stay linked; the original web page or file isn't touched. A blank title is rebuilt from the text.
+- Delete an article (Library card or the editor) after a confirmation.
+- UI: `library/Library.js`, `library/UploadForm.js`, `library/ArticleEditor.js`. API: `GET/POST /api/articles`, `POST /api/articles/upload`,
   `GET/DELETE /api/articles/:id`. Logic: `lib/articles.js`, `lib/extract.js`, `lib/url-guard.js`,
   `lib/document-import.js` (checks), `lib/document-sandbox.js` + `lib/document-worker.mjs` (the parse worker),
   `lib/document-parse.js` (PDF/Word parsing), `lib/article-blocks.js`.
@@ -276,6 +280,39 @@ Each feature lists what the user sees, how it works, and its files. "UI" means `
 - **Saved-concept marks**: phrases already saved from this article are underlined; tapping one opens its concept.
 - Text size can be adjusted, and the setting is remembered (`aha.readSize`).
 
+### 4.3a Reading progress and bookmarks
+
+**Reading progress (automatic).** While you read, the reader remembers the block at the top of the screen and how
+far down you are (`Article.readBlock`, `Article.readPercent`, sent by `PUT /api/articles/:id/progress` 1.5 s after
+scrolling stops and when the page is left). It only saves after you've actually scrolled, so opening an article and
+leaving straight away never resets your place. Opening the article again shows **"You were 42% through this
+article"** with **Continue reading**. Library cards show "42% read" and a thin progress bar ("Finished" from 97%).
+
+**Bookmarks (by you).** Select any passage (any length) and tap the **bookmark** button next to "I don't
+understand" (desktop pill or phone action bar). Choose **Re-visit later** or **Important**, add an optional note,
+and save. In the article:
+- Bookmarked blocks get a coloured left edge: blue for re-visit, amber for important.
+- The **bookmark** button in the reader's top bar (with a count) lists this article's bookmarks in reading order:
+  **Go to**, **Edit** (kind, note, delete), and **Bookmark where I am** (bookmarks the block at the top of the screen).
+
+**The Bookmarks page** (`/bookmarks`, reached from the **Concepts | Bookmarks** switch at the top of the Notebook)
+lists every bookmark with its note, grouped by article, newest first. Filter by All / Re-visit / Important, search
+passages, notes and article titles, **Open** one to jump straight to it, or **Edit**/delete it.
+
+**How a bookmark finds its spot.** Each bookmark stores the block index *and* the marked text (first 300
+characters). If the article is edited later, `resolveBlock` (`lib/client/bookmarks.js`) looks for the quote's
+opening words (60, then 40, then 24 characters, which also handles a selection that ran into the next paragraph) and
+falls back to the saved index. Links from the Bookmarks page use `/read/<article>#bm-<bookmark id>` so this lookup
+applies; `#p-<block>` also works.
+
+**Limits:** note 2,000 characters; quote 300; 300 bookmarks per article (`409 too_many_bookmarks`). Deleting an
+article deletes its bookmarks (the dialogs say so). Bookmarks work offline for reading (cached by the service
+worker) but adding one needs a connection.
+
+Files: `components/reader/{Reader,BookmarkSheet,ArticleBookmarks,SelectionUI,ArticleBody}.js`,
+`components/bookmarks/Bookmarks.js`, `components/notebook/NotebookSwitch.js`, `lib/bookmarks.js`,
+`lib/client/bookmarks.js`, `api/bookmarks/**`, `api/articles/[id]/progress`.
+
 ### 4.4 Notebook (`/notebook`, `/notebook/:id`)
 
 - Lists saved concepts, newest first, loading 30 at a time (up to 50 per request).
@@ -285,6 +322,9 @@ Each feature lists what the user sees, how it works, and its files. "UI" means `
   Review this one card now. Delete with undo.
 - Saving the same term twice from the same article is refused (`409 already_saved`), and the UI links to the
   existing concept instead.
+- **Add your own** (Notebook → **Add** → `/notebook/new`): write a term and what it means, with optional notes, tags
+  and the article it came from. No AI is involved; it joins the review schedule (due tomorrow) like any concept.
+  Its detail page says "Written by you". Translation needs an AI explanation, so it isn't offered for these.
 - UI: `notebook/Notebook.js`, `notebook/ConceptCard.js`, `notebook/ConceptDetail.js`. API: `/api/notebook`,
   `/api/notebook/:id`. Logic: `lib/concepts.js`.
 
@@ -372,9 +412,10 @@ concepts but unlinks them.
 |---|---|---|
 | **User** | An account | `email` (unique), `locale` ("en"/"zh"), `helpLevel` (1–3), `onboardedAt` (null until onboarding is done), `sessionVersion` (bumped by "sign out of all devices") |
 | **MagicToken** | One sign-in email | `tokenHash` (an HMAC of the link token; the token itself is never stored), `codeHash` (HMAC of the 6-digit code), `attempts` (wrong codes, locks at 5), `next` (where to go after sign-in), `consumed`, `expiresAt` (15 minutes) |
-| **Article** | Something the user is reading | `content` (block text, capped at 200,000 chars), `url`/`domain` (only for link imports), `fileName` (only for uploads), `lastReadAt` |
+| **Article** | Something the user is reading | `content` (block text, capped at 200,000 chars), `url`/`domain` (only for link imports), `fileName` (only for uploads), `readBlock` / `readPercent` (reading progress), `lastReadAt` |
 | **Explanation** | One AI explanation shown to the user | `highlightedText`, `surroundingText`, `helpLevel`, `language`, `explanation`, `translationZh`, `aiProvider`, `aiModel`, `aiTokensUsed`, `aiLatencyMs`, `cacheHit` |
 | **Concept** | A Notebook entry | `term`, `definition`, `definitionZh`, `userNotes`, `tags[]`, plus scheduling fields `nextReviewAt`, `interval`, `easeFactor`, `repetitions`, `reviewCount`, `lastReviewedAt` |
+| **Bookmark** | A marked passage in an article | `articleId`, `blockIndex`, `quote` (≤300 chars, used to find the spot again after edits), `kind` (`revisit` / `important`), `note` |
 | **ReviewCard** | One rating of a concept (history) | `quality` 0–5, `clientId` (unique per user, makes offline re-sends harmless), `reviewedAt` |
 | **AiCall** | One attempt at one provider | `task` (explain/translate), `provider`, `model`, `status` (`ok` / `infrastructure` / `refusal` / `invalid_output` / `skipped`), `inputTokens`, `outputTokens`, `latencyMs`, `detail` (redacted error) |
 | **LogEntry** | One *kind* of problem | `level` (WARN/ERROR/CRITICAL), `source`, `message` (constant text), `fingerprint` (unique), `count`, `detail` (latest), `firstDetail`, `resolvedAt`, `alertedAt`, `lastSeenAt` |
@@ -922,10 +963,16 @@ admin.
 | 🔒 `POST /api/articles` | `{text, title?}` or `{url}` | 201 `{article}` | 20/min; one import at a time |
 | 🔒 `POST /api/articles/upload` | Raw file body; `Content-Type` = file type; `X-File-Name` = `encodeURIComponent(name)` | 201 `{article}` (with `fileName`), or 200 for the same file again within 10 min | 20/min (shared with articles); one upload at a time per user; 2 parses at once per server |
 | 🔒 `GET / DELETE /api/articles/:id` | – | `{article}` (with content) / `{ok}` | – |
+| 🔒 `PUT /api/articles/:id/progress` | `{block, percent}` | 204 | 120/min |
+| 🔒 `GET /api/bookmarks` | `?kind=revisit\|important&articleId=` | `{bookmarks:[{id,articleId,articleTitle,blockIndex,quote,kind,note,createdAt}], counts:{all,revisit,important}}` | – |
+| 🔒 `POST /api/bookmarks` | `{articleId, blockIndex, quote, kind, note?}` | 201 `{bookmark}`; 409 `too_many_bookmarks` | 60/min |
+| 🔒 `PATCH / DELETE /api/bookmarks/:id` | PATCH: `{kind?, note?}` | `{bookmark}` / `{ok}` | 60/min |
+| 🔒 `PATCH /api/articles/:id` | `{title?, text?}` (at least one; blank title = rebuilt from text) | `{article}` | 20/min (shared with articles) |
 | 🔒 `POST /api/explain` | `{highlightedText, surroundingText?, helpLevel?, language?, articleId?}` | `{explanationId, explanation, helpLevel, language, cached, provider, model}` | 30/min + daily quota |
 | 🔒 `POST /api/translate` | `{explanationId}` | `{translation, language:"zh", cached}` | 20/min + daily quota |
 | 🔒 `GET /api/notebook` | `?search=&tag=&articleId=&cursor=&limit=` | `{concepts, tags? (first page only), nextCursor}` | – |
 | 🔒 `POST /api/notebook` | `{explanationId, term?, tags?, userNotes?}` | 201 `{concept}`; 409 `already_saved` | 60/min |
+| 🔒 `POST /api/notebook` (your own) | `{term, definition, tags?, userNotes?, articleId?}` (no `explanationId`) | 201 `{concept}`; 409 `already_saved` | 60/min |
 | 🔒 `GET / PATCH / DELETE /api/notebook/:id` | PATCH: `{term?, definition?, userNotes?, tags?}` | `{concept}` / `{ok}` | 60/min |
 | 🔒 `GET /api/review` | `?countOnly=1` for just the count | `{due, dueCount, nextDueAt, stats:{streakDays, reviewedToday, mastered}\|null}` | – |
 | 🔒 `POST /api/review` | `{conceptId, quality 0–5, clientId?}` | `{concept, nextReviewAt}` (repeat `clientId` → same answer) | 120/min |

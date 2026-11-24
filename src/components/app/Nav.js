@@ -16,6 +16,8 @@ const ITEMS = [
 ];
 
 function isActive(pathname, href) {
+  // Bookmarks live beside Notebook concepts (one "things I kept" tab).
+  if (href === "/notebook" && (pathname === "/bookmarks" || pathname.startsWith("/bookmarks/"))) return true;
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 

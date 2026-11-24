@@ -5,9 +5,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/client/api.js";
 import { sentenceSpans, offsetAtPoint, snapshotFromRange } from "@/lib/client/selection.js";
 import { parseArticle } from "@/lib/client/article-blocks.js";
+import { resolveBlock, scrollPercent, scrollToBlock, topVisibleBlock } from "@/lib/client/bookmarks.js";
 import { useCoarsePointer, useIsDesktop, useStoredState } from "@/lib/client/hooks.js";
 import { formatDate, nextReviewPhrase } from "@/lib/client/relative-time.js";
 import { useUser } from "@/components/app/UserContext.js";
@@ -23,11 +25,13 @@ import ArticleBody from "./ArticleBody.js";
 import { useArticleSelection } from "./useArticleSelection.js";
 import { SelectionPill, SelectionActionBar } from "./SelectionUI.js";
 import ExplainPanel from "./ExplainPanel.js";
+import BookmarkSheet from "./BookmarkSheet.js";
+import ArticleBookmarks from "./ArticleBookmarks.js";
 import { plainPreview } from "@/components/notebook/ConceptCard.js";
 
 const SIZES = { S: 16, M: 18, L: 20 };
 
-function TopBar({ title, size, setSize, coarse, tapMode, setTapMode }) {
+function TopBar({ title, size, setSize, coarse, tapMode, setTapMode, bookmarkCount, onBookmarks }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef(null);
   const [rect, setRect] = useState(null);
@@ -41,6 +45,16 @@ function TopBar({ title, size, setSize, coarse, tapMode, setTapMode }) {
         <p className="min-w-0 flex-1 truncate px-1 text-center text-[15px] font-semibold" aria-hidden="true">
           {title}
         </p>
+        {onBookmarks ? (
+          <span className="relative inline-flex">
+            <IconButton icon="bookmark" label={`Bookmarks in this article (${bookmarkCount})`} onClick={onBookmarks} />
+            {bookmarkCount > 0 ? (
+              <span aria-hidden="true" className="pointer-events-none absolute top-1 right-0.5 min-w-[18px] rounded-full bg-accent px-1 text-center text-[11px] leading-[18px] font-semibold text-accent-fg">
+                {bookmarkCount > 99 ? "99+" : bookmarkCount}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
         {coarse ? (
           <IconButton
             icon="pointer"
@@ -159,6 +173,21 @@ export default function Reader({ id }) {
   const tapMode = coarse && tapModeRaw === "1";
 
   const [pending, setPending] = useArticleSelection(bodyRef, { coarse, enabled: article.status === "ready" });
+  const router = useRouter();
+  const [bookmarks, setBookmarks] = useState([]);
+  // null | {mode:"create", blockIndex, quote} | {mode:"edit", bookmark}
+  const [bmSheet, setBmSheet] = useState(null);
+  const [bmListOpen, setBmListOpen] = useState(false);
+  const [resume, setResume] = useState(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api(`/api/bookmarks?articleId=${encodeURIComponent(id)}`, { signal: controller.signal, timeoutMs: 15000 })
+      .then((data) => setBookmarks(data?.bookmarks || []))
+      // Bookmarks are extra: without them the article still reads fine.
+      .catch(() => {});
+    return () => controller.abort();
+  }, [id, attempt]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -195,6 +224,129 @@ export default function Reader({ id }) {
 
   const blocks = useMemo(() => (article.status === "ready" ? parseArticle(article.data?.content) : []), [article]);
   const paragraphs = useMemo(() => blocks.map((b) => b.text), [blocks]);
+  const placedBookmarks = useMemo(() => bookmarks.map((b) => ({ ...b, at: resolveBlock(b, paragraphs) })), [bookmarks, paragraphs]);
+  const bookmarkKinds = useMemo(() => {
+    const kinds = {};
+    for (const b of placedBookmarks) if (b.at >= 0 && kinds[b.at] !== "important") kinds[b.at] = b.kind;
+    return kinds;
+  }, [placedBookmarks]);
+
+  // Arriving at a spot: /read/id#bm-<id> (from the Bookmarks page) or #p-<block> jumps
+  // there; otherwise an article read part-way offers to continue where the reader stopped.
+  const articleReady = article.status === "ready";
+  const savedBlock = article.data?.readBlock;
+  const savedPercent = article.data?.readPercent ?? 0;
+  useEffect(() => {
+    if (!articleReady) return undefined;
+    if (window.location.hash.startsWith("#bm-")) return undefined; // handled once bookmarks load
+    const target = /^#p-(\d+)$/.exec(window.location.hash);
+    if (target) {
+      const timer = setTimeout(() => scrollToBlock(bodyRef.current, Number(target[1])), 80);
+      return () => clearTimeout(timer);
+    }
+    if (Number.isInteger(savedBlock) && savedBlock > 0 && savedPercent > 2 && savedPercent < 97) {
+      queueMicrotask(() => setResume({ block: savedBlock, percent: savedPercent }));
+    }
+    return undefined;
+  }, [articleReady, savedBlock, savedPercent]);
+
+  const jumpedToBookmark = useRef(false);
+  useEffect(() => {
+    if (!articleReady || jumpedToBookmark.current) return undefined;
+    const match = /^#bm-([A-Za-z0-9_-]{1,100})$/.exec(window.location.hash);
+    const target = match && placedBookmarks.find((b) => b.id === match[1]);
+    if (!target) return undefined;
+    jumpedToBookmark.current = true;
+    const timer = setTimeout(() => scrollToBlock(bodyRef.current, target.at), 80);
+    return () => clearTimeout(timer);
+  }, [articleReady, placedBookmarks]);
+
+  // Reading progress: saved a moment after scrolling stops and when the page is left.
+  // Nothing is saved until the reader has actually scrolled, so opening an article and
+  // leaving at once never loses the place they had reached.
+  const fromCache = article.fromCache;
+  useEffect(() => {
+    if (!articleReady || fromCache) return undefined;
+    let moved = false;
+    let last = "";
+    let timer;
+    const send = (keepalive = false) => {
+      if (!moved) return;
+      const block = topVisibleBlock(bodyRef.current);
+      if (block < 0) return;
+      const percent = scrollPercent();
+      const key = `${block}:${percent}`;
+      if (key === last) return;
+      last = key;
+      api(`/api/articles/${encodeURIComponent(id)}/progress`, { method: "PUT", body: { block, percent }, keepalive, redirectOn401: false, timeoutMs: 10000 }).catch(() => {});
+    };
+    const onScroll = () => {
+      moved = true;
+      clearTimeout(timer);
+      timer = setTimeout(() => send(), 1500);
+    };
+    const onHide = () => {
+      if (document.visibilityState === "hidden") send(true);
+    };
+    const onPageHide = () => send(true);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      clearTimeout(timer);
+      send(true);
+      window.removeEventListener("scroll", onScroll);
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, [articleReady, fromCache, id]);
+
+  const startBookmark = useCallback(
+    (snap) => {
+      if (!snap) return;
+      setPending(null);
+      setTap(null);
+      window.getSelection()?.removeAllRanges();
+      setBmSheet({ mode: "create", blockIndex: snap.paragraphIndexes[0], quote: snap.highlightedText });
+    },
+    [setPending]
+  );
+
+  const bookmarkHere = () => {
+    const block = Math.max(0, topVisibleBlock(bodyRef.current));
+    setBmListOpen(false);
+    setBmSheet({ mode: "create", blockIndex: block, quote: paragraphs[block] || "" });
+  };
+
+  const saveBookmark = async ({ kind, note }) => {
+    if (bmSheet.mode === "create") {
+      const data = await api("/api/bookmarks", {
+        method: "POST",
+        body: { articleId: id, blockIndex: bmSheet.blockIndex, quote: bmSheet.quote, kind, note },
+        timeoutMs: 15000,
+      });
+      setBookmarks((list) => [data.bookmark, ...list]);
+      setBmSheet(null);
+      toast({ message: kind === "important" ? "Marked as important." : "Bookmarked to re-visit.", tone: "success", action: { label: "All bookmarks", onClick: () => router.push("/bookmarks") } });
+    } else {
+      const data = await api(`/api/bookmarks/${encodeURIComponent(bmSheet.bookmark.id)}`, { method: "PATCH", body: { kind, note }, timeoutMs: 15000 });
+      setBookmarks((list) => list.map((b) => (b.id === data.bookmark.id ? data.bookmark : b)));
+      setBmSheet(null);
+      toast({ message: "Bookmark updated.", tone: "success" });
+    }
+  };
+
+  const deleteBookmark = async () => {
+    const target = bmSheet.bookmark;
+    try {
+      await api(`/api/bookmarks/${encodeURIComponent(target.id)}`, { method: "DELETE", timeoutMs: 15000 });
+    } catch (err) {
+      if (err.code !== "not_found") throw err;
+    }
+    setBookmarks((list) => list.filter((b) => b.id !== target.id));
+    setBmSheet(null);
+    toast({ message: "Bookmark deleted." });
+  };
 
   const openPanel = useCallback(
     (snap) => {
@@ -344,7 +496,16 @@ export default function Reader({ id }) {
 
   return (
     <>
-      <TopBar title={a?.title || ""} size={sizeKey} setSize={setSizeKey} coarse={coarse} tapMode={tapMode} setTapMode={setTapMode} />
+      <TopBar
+        title={a?.title || ""}
+        size={sizeKey}
+        setSize={setSizeKey}
+        coarse={coarse}
+        tapMode={tapMode}
+        setTapMode={setTapMode}
+        bookmarkCount={bookmarks.length}
+        onBookmarks={article.status === "ready" && !article.fromCache ? () => setBmListOpen(true) : null}
+      />
       {/* The side panel (≥1024px) takes 420px on the right: the text moves over so it is never covered. */}
       <div className={`transition-[padding] duration-[var(--dur)] ${panelOpen ? "lg:pr-[420px]" : ""}`}>
         <main
@@ -372,8 +533,33 @@ export default function Reader({ id }) {
                     </a>
                   </>
                 ) : null}
+                {a?.id && !article.fromCache ? (
+                  <>
+                    {" · "}
+                    <Link href={`/read/${encodeURIComponent(a.id)}/edit`} className="-my-3 inline-flex min-h-[44px] items-center gap-1 px-1 align-middle font-semibold">
+                      <Icon name="pencil" size={14} /> Edit
+                    </Link>
+                  </>
+                ) : null}
               </p>
               {article.fromCache ? <SavedCopyNote className="mb-4" /> : null}
+              {resume ? (
+                <Alert
+                  tone="info"
+                  compact
+                  className="mb-4"
+                  action={{
+                    label: "Continue reading",
+                    onClick: () => {
+                      scrollToBlock(bodyRef.current, resume.block);
+                      setResume(null);
+                    },
+                  }}
+                  onDismiss={() => setResume(null)}
+                >
+                  You were {resume.percent}% through this article.
+                </Alert>
+              ) : null}
               {marksError && marksError.code !== "unauthenticated" ? (
                 <Alert
                   tone="neutral"
@@ -415,6 +601,7 @@ export default function Reader({ id }) {
                   tapRanges={!active ? tap?.ranges : null}
                   fontSize={fontSize}
                   onConceptOpen={onConceptOpen}
+                  bookmarkKinds={bookmarkKinds}
                   onPointerDown={onPointerDown}
                   onPointerUp={onPointerUp}
                 />
@@ -424,11 +611,12 @@ export default function Reader({ id }) {
         </main>
       </div>
 
-      {showPill ? <SelectionPill snapshot={pending} onActivate={() => openPanel(pending)} /> : null}
+      {showPill ? <SelectionPill snapshot={pending} onActivate={() => openPanel(pending)} onBookmark={article.fromCache ? undefined : () => startBookmark(pending)} /> : null}
       {showBar ? (
         <SelectionActionBar
           snapshot={pending}
           onActivate={() => openPanel(pending)}
+          onBookmark={article.fromCache ? undefined : () => startBookmark(pending)}
           onClear={() => {
             setPending(null);
             setTap(null);
@@ -449,6 +637,33 @@ export default function Reader({ id }) {
           onPickSmaller={pickAgain}
           onPickDifferent={pickAgain}
           onSaved={onSaved}
+        />
+      ) : null}
+
+      {bmListOpen ? (
+        <ArticleBookmarks
+          bookmarks={placedBookmarks}
+          onClose={() => setBmListOpen(false)}
+          onAddHere={bookmarkHere}
+          onGo={(b) => {
+            setBmListOpen(false);
+            setTimeout(() => scrollToBlock(bodyRef.current, b.at), 50);
+          }}
+          onEdit={(b) => {
+            setBmListOpen(false);
+            setBmSheet({ mode: "edit", bookmark: b });
+          }}
+        />
+      ) : null}
+      {bmSheet ? (
+        <BookmarkSheet
+          key={bmSheet.mode === "edit" ? bmSheet.bookmark.id : `new-${bmSheet.blockIndex}`}
+          mode={bmSheet.mode}
+          quote={bmSheet.mode === "edit" ? bmSheet.bookmark.quote : bmSheet.quote}
+          initial={bmSheet.mode === "edit" ? { kind: bmSheet.bookmark.kind, note: bmSheet.bookmark.note } : undefined}
+          onSave={saveBookmark}
+          onDelete={bmSheet.mode === "edit" ? deleteBookmark : undefined}
+          onClose={() => setBmSheet(null)}
         />
       ) : null}
 

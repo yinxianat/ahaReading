@@ -288,8 +288,11 @@ export default function ConceptDetail({ id }) {
               <>
                 From <Link href={`/read/${concept.articleId}`}>{concept.articleTitle || "your article"}</Link>
               </>
-            ) : (
+            ) : concept.explanationId ? (
+              // Saved from an explanation whose article has since been deleted.
               "Article deleted"
+            ) : (
+              "Written by you"
             )}
           </dd>
         </div>

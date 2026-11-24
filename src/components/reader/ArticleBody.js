@@ -106,7 +106,7 @@ const HEADING_CLASS = { h2: "mt-8 mb-3 text-[1.3em] leading-snug font-semibold",
  * Long lines are easy to miss (macOS hides scrollbars), so while there's more to the
  * right the edge fades out and a hint says so.
  */
-function CodeBlock({ index, children }) {
+function CodeBlock({ index, children, extraClass = "" }) {
   const ref = useRef(null);
   const [overflow, setOverflow] = useState({ wide: false, atEnd: true });
   useEffect(() => {
@@ -128,7 +128,7 @@ function CodeBlock({ index, children }) {
   return (
     <div className="mb-6">
       <div className="relative">
-        <pre ref={ref} data-p={index} className="article-code max-w-full overflow-x-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-[0.8em] leading-relaxed whitespace-pre" tabIndex={0} aria-label="Code block">
+        <pre ref={ref} data-p={index} className={`article-code${extraClass} max-w-full overflow-x-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-[0.8em] leading-relaxed whitespace-pre`} tabIndex={0} aria-label="Code block">
           <code>{children}</code>
         </pre>
         <div
@@ -145,26 +145,29 @@ function CodeBlock({ index, children }) {
   );
 }
 
-const Block = memo(function Block({ index, block, marks, active, tap, onConceptOpen }) {
+const Block = memo(function Block({ index, block, marks, active, tap, onConceptOpen, bookmark }) {
   const inline = <Inline index={index} text={block.text} marks={marks} active={active} tap={tap} onConceptOpen={onConceptOpen} />;
-  if (block.type === "code") return <CodeBlock index={index}>{inline}</CodeBlock>;
+  // A bookmark only adds a class to the [data-p] element, so its textContent (which
+  // selection offsets rely on) is unchanged.
+  const bm = bookmark ? ` bm bm-${bookmark}` : "";
+  if (block.type === "code") return <CodeBlock index={index} extraClass={bm}>{inline}</CodeBlock>;
   if (block.type === "h") {
     const Tag = HEADING_TAG[block.level] || "h3";
     return (
-      <Tag data-p={index} className={`font-sans break-anywhere ${HEADING_CLASS[Tag]}`}>
+      <Tag data-p={index} className={`font-sans break-anywhere ${HEADING_CLASS[Tag]}${bm}`}>
         {inline}
       </Tag>
     );
   }
   if (block.type === "li") {
     return (
-      <li data-p={index} value={block.ordered && block.number ? block.number : undefined} className="mb-2 pl-1 break-anywhere">
+      <li data-p={index} value={block.ordered && block.number ? block.number : undefined} className={`mb-2 pl-1 break-anywhere${bm}`}>
         {inline}
       </li>
     );
   }
   return (
-    <p data-p={index} className="mb-6 break-anywhere">
+    <p data-p={index} className={`mb-6 break-anywhere${bm}`}>
       {inline}
     </p>
   );
@@ -183,9 +186,9 @@ function groupBlocks(blocks) {
 }
 
 /**
- * @param {{blocks:import("@/lib/client/article-blocks.js").Block[], concepts:object[], activeRanges?:Object<number,[number,number]>, tapRanges?:Object<number,[number,number]>, onConceptOpen?:Function, fontSize:number, bodyRef:any}} props
+ * @param {{blocks:import("@/lib/client/article-blocks.js").Block[], concepts:object[], activeRanges?:Object<number,[number,number]>, tapRanges?:Object<number,[number,number]>, onConceptOpen?:Function, fontSize:number, bodyRef:any, bookmarkKinds?:Object<number,"revisit"|"important">}} props `bookmarkKinds`: block index → bookmark kind shown on that block
  */
-export default function ArticleBody({ blocks, concepts, activeRanges, tapRanges, onConceptOpen, fontSize, bodyRef, onPointerDown, onPointerUp }) {
+export default function ArticleBody({ blocks, concepts, activeRanges, tapRanges, onConceptOpen, fontSize, bodyRef, onPointerDown, onPointerUp, bookmarkKinds }) {
   const texts = useMemo(() => blocks.map((b) => b.text), [blocks]);
   const marks = useMemo(() => findConceptMarks(texts, concepts), [texts, concepts]);
   const groups = useMemo(() => groupBlocks(blocks), [blocks]);
@@ -198,6 +201,7 @@ export default function ArticleBody({ blocks, concepts, activeRanges, tapRanges,
       active={activeRanges?.[i] || null}
       tap={tapRanges?.[i] || null}
       onConceptOpen={onConceptOpen}
+      bookmark={bookmarkKinds?.[i] || null}
     />
   );
   return (

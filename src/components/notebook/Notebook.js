@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { api } from "@/lib/client/api.js";
 import { getPendingDeletes, getServerPendingDeletes, subscribePendingDeletes } from "@/lib/client/pending-deletes.js";
 import TopBar from "@/components/app/TopBar.js";
+import NotebookSwitch from "./NotebookSwitch.js";
 import Button from "@/components/ui/Button.js";
 import Icon from "@/components/ui/icons.js";
 import Sheet from "@/components/ui/Sheet.js";
@@ -174,7 +175,16 @@ export default function Notebook({ initialSearch, initialTag, initialArticleId }
 
   return (
     <main id="main" className="app-main mx-auto max-w-[720px] px-4 md:px-6">
-      <TopBar title="Notebook" sub={countLabel || " "} />
+      <TopBar
+        title="Notebook"
+        sub={countLabel || " "}
+        actions={
+          <Button href="/notebook/new" variant="secondary" icon="plus">
+            Add
+          </Button>
+        }
+      />
+      <NotebookSwitch current="concepts" />
 
       <div className="sticky top-0 z-20 -mx-4 bg-bg px-4 pt-1 pb-2 md:-mx-6 md:px-6">
         <div className="relative">
@@ -246,7 +256,7 @@ export default function Notebook({ initialSearch, initialTag, initialArticleId }
       {state.status === "error" ? <ErrorState title="Couldn't load your Notebook." error={state.error} onRetry={reload} /> : null}
 
       {state.status === "ready" && visible.length === 0 && !filtered ? (
-        <EmptyState icon="bookmark" title="Your Notebook is empty" body="Save an explanation while reading and it'll show up here." action={{ label: "Start reading", href: "/read" }} />
+        <EmptyState icon="bookmark" title="Your Notebook is empty" body="Save an explanation while reading, or tap Add to write your own. They'll show up here." action={{ label: "Start reading", href: "/read" }} />
       ) : null}
       {state.status === "ready" && visible.length === 0 && filtered ? (
         <EmptyState

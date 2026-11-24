@@ -3,7 +3,7 @@ import { parseJsonBody, badRequest, jsonError, rateLimited, hasNul, withErrorHan
 import { checkRateLimit } from "@/lib/rate-limit.js";
 import { logger } from "@/lib/logger.js";
 import { UrlGuardError } from "@/lib/url-guard.js";
-import { createPastedArticle, importArticleFromUrl, listArticles, serializeArticle, MAX_CONTENT_CHARS, MAX_TITLE_CHARS } from "@/lib/articles.js";
+import { createPastedArticle, importArticleFromUrl, listArticles, serializeArticle, parseArticleText, parseArticleTitle } from "@/lib/articles.js";
 
 /** GET → {articles:[{id,title,domain,url,lastReadAt,conceptCount,excerpt}]} */
 export const GET = withErrorHandling(async (request) => {
@@ -49,16 +49,11 @@ export const POST = withErrorHandling(async (request) => {
     }
   }
 
-  if (typeof text !== "string" || !text.trim()) return badRequest("Paste the text you want to read.", "text");
-  if (hasNul(text)) return badRequest("Your text contains a hidden NUL character. Copy it again from the source, or retype the affected part.", "text");
-  if (text.length > MAX_CONTENT_CHARS) {
-    return badRequest(`That's too long to save — paste up to ${MAX_CONTENT_CHARS.toLocaleString("en-US")} characters.`, "text");
-  }
-  if (title !== undefined && title !== null && typeof title !== "string") return badRequest("The title must be text.", "title");
-  if (hasNul(title)) return badRequest("The title contains a hidden character. Retype it and try again.", "title");
-  const cleanTitle = typeof title === "string" ? title.trim() : "";
-  if (cleanTitle.length > MAX_TITLE_CHARS) return badRequest(`Keep the title to ${MAX_TITLE_CHARS} characters or fewer.`, "title");
+  const parsedText = parseArticleText(text);
+  if (parsedText.error) return parsedText.error;
+  const parsedTitle = parseArticleTitle(title);
+  if (parsedTitle.error) return parsedTitle.error;
 
-  const article = await createPastedArticle(userId, { text, title: cleanTitle || null });
+  const article = await createPastedArticle(userId, { text: parsedText.text, title: parsedTitle.title });
   return Response.json({ article: serializeArticle(article) }, { status: 201 });
 }, { source: "api" });

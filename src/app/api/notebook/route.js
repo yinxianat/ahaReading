@@ -4,7 +4,7 @@ import { parseJsonBody, badRequest, jsonError, rateLimited, requireString, hasNu
 import { checkRateLimit } from "@/lib/rate-limit.js";
 import { addDays } from "@/lib/srs.js";
 import {
-  CONCEPT_INCLUDE, MAX_TERM_CHARS, MAX_TAG_CHARS, normalizeTag, parseNotes, parseTags, parseTerm, serializeConcept, termKey,
+  CONCEPT_INCLUDE, MAX_TERM_CHARS, MAX_TAG_CHARS, normalizeTag, parseDefinition, parseNotes, parseTags, parseTerm, serializeConcept, termKey,
 } from "@/lib/concepts.js";
 
 const PAGE_SIZE = 30;
@@ -111,9 +111,52 @@ async function findSameTerm(tx, userId, articleId, key) {
 }
 
 /**
- * POST {explanationId, term?, tags?, userNotes?} → 201 {concept}; 409 already_saved {conceptId}
- * when this explanation is saved, or the user already saved the same term from the
- * same article. `term` (optional) replaces the highlighted text as the card's front.
+ * Explanation-based source: the explanation's highlight (or a custom `term`) and its text.
+ * @returns {Promise<{source: object} | {error: Response}>}
+ */
+async function fromExplanation(userId, explanationId, customTerm) {
+  const explanation = await prisma.explanation.findFirst({
+    where: { id: explanationId, userId },
+    select: { id: true, articleId: true, highlightedText: true, explanation: true, translationZh: true, concept: { select: { id: true } } },
+  });
+  if (!explanation) return { error: jsonError(404, "not_found", "We couldn't find that explanation. Ask for a new explanation and save that one.") };
+  if (explanation.concept) return { error: alreadySaved(explanation.concept.id) };
+  return {
+    source: {
+      explanationId,
+      articleId: explanation.articleId,
+      term: customTerm ?? explanation.highlightedText.trim().replace(/\s+/g, " ").slice(0, MAX_TERM_CHARS),
+      definition: explanation.explanation,
+      definitionZh: explanation.translationZh,
+    },
+  };
+}
+
+/**
+ * Manual source: the user's own term and definition, optionally tied to one of their articles.
+ * @returns {Promise<{source: object} | {error: Response}>}
+ */
+async function fromUserInput(userId, data, customTerm) {
+  if (customTerm === null) return { error: badRequest("Add the term or phrase you want to remember.", "term") };
+  const definition = parseDefinition(data.definition);
+  if (definition.error) return definition;
+  let articleId = null;
+  if (data.articleId !== undefined && data.articleId !== null && data.articleId !== "") {
+    const id = requireString(data.articleId, { maxLength: 100 });
+    if (!id) return { error: badRequest("articleId must be an article id.", "articleId") };
+    const article = await prisma.article.findFirst({ where: { id, userId }, select: { id: true } });
+    if (!article) return { error: jsonError(404, "not_found", "We couldn't find that article. Pick another one, or leave it empty.") };
+    articleId = id;
+  }
+  return { source: { explanationId: null, articleId, term: customTerm, definition: definition.definition, definitionZh: null } };
+}
+
+/**
+ * POST → 201 {concept}; 409 already_saved {conceptId} when the explanation is already
+ * saved, or the user already has the same term from the same article (or both without one).
+ *   From an explanation: {explanationId, term?, tags?, userNotes?} — `term` replaces the
+ *     highlighted text as the card's front.
+ *   Written by the user: {term, definition, tags?, userNotes?, articleId?} — no AI involved.
  */
 export const POST = withErrorHandling(async (request) => {
   const auth = await requireUser(request);
@@ -125,8 +168,6 @@ export const POST = withErrorHandling(async (request) => {
 
   const body = await parseJsonBody(request);
   if (!body.ok) return badRequest("Send the concept as a JSON object.");
-  const explanationId = requireString(body.data.explanationId, { maxLength: 100 });
-  if (!explanationId) return badRequest("explanationId is required.", "explanationId");
   const tags = parseTags(body.data.tags);
   if (tags.error) return tags.error;
   const notes = parseNotes(body.data.userNotes);
@@ -138,31 +179,31 @@ export const POST = withErrorHandling(async (request) => {
     customTerm = parsed.term;
   }
 
-  const explanation = await prisma.explanation.findFirst({
-    where: { id: explanationId, userId },
-    select: { id: true, articleId: true, highlightedText: true, explanation: true, translationZh: true, concept: { select: { id: true } } },
-  });
-  if (!explanation) return jsonError(404, "not_found", "We couldn't find that explanation. Ask for a new explanation and save that one.");
-  if (explanation.concept) return alreadySaved(explanation.concept.id);
-
-  const term = customTerm ?? explanation.highlightedText.trim().replace(/\s+/g, " ").slice(0, MAX_TERM_CHARS);
-  const key = termKey(term);
+  let resolved;
+  if (body.data.explanationId !== undefined && body.data.explanationId !== null) {
+    const explanationId = requireString(body.data.explanationId, { maxLength: 100 });
+    if (!explanationId) return badRequest("explanationId must be an explanation id.", "explanationId");
+    resolved = await fromExplanation(userId, explanationId, customTerm);
+  } else if (body.data.definition !== undefined) {
+    resolved = await fromUserInput(userId, body.data, customTerm);
+  } else {
+    return badRequest("Send an explanationId, or a term and a definition.", "definition");
+  }
+  if (resolved.error) return resolved.error;
+  const { source } = resolved;
+  const key = termKey(source.term);
 
   try {
     const outcome = await prisma.$transaction(async (tx) => {
-      // Serialise saves of one term for one user, so two explanations of the same phrase
+      // Serialise saves of one term for one user, so two saves of the same phrase
       // racing each other cannot both pass the duplicate check.
       await tx.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext(${`${userId}:${key}`}))`;
-      const existingId = await findSameTerm(tx, userId, explanation.articleId, key);
+      const existingId = await findSameTerm(tx, userId, source.articleId, key);
       if (existingId) return { duplicateOf: existingId };
       const concept = await tx.concept.create({
         data: {
           userId,
-          explanationId,
-          articleId: explanation.articleId,
-          term,
-          definition: explanation.explanation,
-          definitionZh: explanation.translationZh,
+          ...source,
           userNotes: notes.userNotes,
           tags: tags.tags,
           easeFactor: 2.5,
@@ -177,8 +218,8 @@ export const POST = withErrorHandling(async (request) => {
     return Response.json({ concept: serializeConcept(outcome.concept) }, { status: 201 });
   } catch (err) {
     // Double-tap race: the unique explanationId makes the second insert fail.
-    if (err?.code === "P2002") {
-      const existing = await prisma.concept.findFirst({ where: { explanationId, userId }, select: { id: true } });
+    if (err?.code === "P2002" && source.explanationId) {
+      const existing = await prisma.concept.findFirst({ where: { explanationId: source.explanationId, userId }, select: { id: true } });
       return alreadySaved(existing?.id);
     }
     throw err;

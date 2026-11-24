@@ -31,7 +31,7 @@ vi.mock("@/lib/url-guard.js", async (importOriginal) => {
 
 import prisma from "@/lib/db.js";
 import { GET as listArticles, POST as createArticle } from "@/app/api/articles/route.js";
-import { GET as getArticle, DELETE as deleteArticle } from "@/app/api/articles/[id]/route.js";
+import { GET as getArticle, DELETE as deleteArticle, PATCH as patchArticle } from "@/app/api/articles/[id]/route.js";
 
 const EMAIL_PREFIX = "feat-articles-";
 let alice;
@@ -188,5 +188,63 @@ npm test</pre><ul><li>one</li><li>two</li></ul></article></body></html>`
     expect(article.content).toContain("## Install");
     expect(article.content).toContain("```\nnpm install\nnpm test\n```");
     expect(article.content).toContain("- one\n- two");
+  });
+});
+
+describe("PATCH /api/articles/:id (edit)", () => {
+  const patch = (id, body, raw) =>
+    patchArticle(new Request(`http://localhost/api/articles/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: raw ?? JSON.stringify(body) }), ctx(id));
+  const create = async (text = "Original first line\n\nOriginal body.", title) => (await (await post(title ? { text, title } : { text })).json()).article;
+
+  it("renames and rewrites; edited text keeps paragraphs, headings and code", async () => {
+    const a = await create();
+    const renamed = await patch(a.id, { title: "  Better   title " });
+    expect(renamed.status).toBe(200);
+    expect((await renamed.json()).article).toMatchObject({ title: "Better title", content: a.content });
+
+    const text = "## Section\n\nNew paragraph\nwrapped.\n\n```js\nconst x = 1;\n\nconst y = 2;\n```";
+    const rewritten = await (await patch(a.id, { text })).json();
+    expect(rewritten.article.title).toBe("Better title");
+    expect(rewritten.article.content).toBe("## Section\n\nNew paragraph\nwrapped.\n\n```js\nconst x = 1;\n\nconst y = 2;\n```");
+  });
+
+  it("a blank title is rebuilt from the text", async () => {
+    const a = await create("Body text first line\n\nMore.", "Old title");
+    const res = await (await patch(a.id, { title: "", text: "Brand new opening line\n\nRest." })).json();
+    expect(res.article.title).toBe("Brand new opening line");
+  });
+
+  it("keeps uploaded/imported metadata, and saved concepts stay linked", async () => {
+    const a = await prisma.article.create({ data: { userId: alice.id, title: "Doc", content: "Old text about caching.", fileName: "notes.pdf" } });
+    const concept = await prisma.concept.create({ data: { userId: alice.id, articleId: a.id, term: "caching", definition: "d" } });
+    const res = await (await patch(a.id, { text: "New text that still mentions caching." })).json();
+    expect(res.article).toMatchObject({ fileName: "notes.pdf", content: "New text that still mentions caching." });
+    expect((await prisma.concept.findUnique({ where: { id: concept.id } })).articleId).toBe(a.id);
+  });
+
+  it("validates input and names the field", async () => {
+    const a = await create();
+    expect((await patch(a.id, null, "{bad")).status).toBe(400);
+    const empty = await patch(a.id, {});
+    expect(empty.status).toBe(400);
+    const blank = await (await patch(a.id, { text: "   " })).json();
+    expect(blank).toMatchObject({ error: "invalid_input", field: "text" });
+    expect((await (await patch(a.id, { title: "x".repeat(201) })).json()).field).toBe("title");
+    expect((await (await patch(a.id, { title: 42 })).json()).field).toBe("title");
+    expect((await (await patch(a.id, { text: "a\u0000b" })).json()).field).toBe("text");
+    expect((await patch(a.id, { text: "x".repeat(200_001) })).status).toBe(400);
+  });
+
+  it("only the owner can edit; 401 without a session; rate limited", async () => {
+    const a = await create();
+    asUser(bob);
+    expect((await patch(a.id, { title: "Hijack" })).status).toBe(404);
+    expect((await prisma.article.findUnique({ where: { id: a.id } })).title).not.toBe("Hijack");
+    expect((await patch("nope", { title: "x" })).status).toBe(404);
+    state.user = null;
+    expect((await patch(a.id, { title: "x" })).status).toBe(401);
+    asUser(alice);
+    state.limited = 7;
+    expect((await patch(a.id, { title: "x" })).status).toBe(429);
   });
 });

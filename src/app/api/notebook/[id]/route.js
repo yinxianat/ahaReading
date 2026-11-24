@@ -1,8 +1,8 @@
 import prisma from "@/lib/db.js";
 import { requireUser } from "@/lib/auth.js";
-import { parseJsonBody, badRequest, jsonError, rateLimited, hasNul, withErrorHandling } from "@/lib/http.js";
+import { parseJsonBody, badRequest, jsonError, rateLimited, withErrorHandling } from "@/lib/http.js";
 import { checkRateLimit } from "@/lib/rate-limit.js";
-import { CONCEPT_INCLUDE, MAX_DEFINITION_CHARS, parseNotes, parseTags, parseTerm, serializeConcept } from "@/lib/concepts.js";
+import { CONCEPT_INCLUDE, parseDefinition, parseNotes, parseTags, parseTerm, serializeConcept } from "@/lib/concepts.js";
 
 const notFound = () => jsonError(404, "not_found", "We couldn't find that concept. It may have been deleted — go back to your notebook.");
 
@@ -40,12 +40,9 @@ function parsePatch(input) {
     data.term = term.term;
   }
   if ("definition" in input) {
-    if (typeof input.definition !== "string" || !input.definition.trim()) return { error: badRequest("The definition can't be empty.", "definition") };
-    if (hasNul(input.definition)) return { error: badRequest("The definition contains a hidden character. Retype it and try again.", "definition") };
-    if (input.definition.trim().length > MAX_DEFINITION_CHARS) {
-      return { error: badRequest(`Keep the definition to ${MAX_DEFINITION_CHARS.toLocaleString("en-US")} characters or fewer.`, "definition") };
-    }
-    data.definition = input.definition.trim();
+    const definition = parseDefinition(input.definition);
+    if (definition.error) return definition;
+    data.definition = definition.definition;
   }
   if (Object.keys(data).length === 0) return { error: badRequest("Nothing to update. Send userNotes, tags, term or definition.") };
   return { data };

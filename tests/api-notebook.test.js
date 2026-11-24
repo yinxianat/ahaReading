@@ -387,3 +387,39 @@ describe("round-2 review behaviour", () => {
     expect(stored.easeFactor).toBeCloseTo(2.7, 5);
   });
 });
+
+describe("POST /api/notebook (written by the user)", () => {
+  const add = (body) => saveConcept(json("POST", "/api/notebook", body));
+
+  it("creates a concept with no AI explanation, due for review tomorrow", async () => {
+    const res = await add({ term: "  Idempotency  key ", definition: "  A token that makes a retry safe. ", tags: ["API"], userNotes: "from standup" });
+    expect(res.status).toBe(201);
+    const { concept } = await res.json();
+    expect(concept).toMatchObject({ term: "Idempotency key", definition: "A token that makes a retry safe.", tags: ["api"], userNotes: "from standup", explanationId: null, articleId: null, reviewCount: 0 });
+    const due = new Date(concept.nextReviewAt).getTime() - Date.now();
+    expect(due).toBeGreaterThan(23 * 3600_000);
+  });
+
+  it("can be tied to one of the user's articles, never someone else's", async () => {
+    const res = await add({ term: "fiber", definition: "React's unit of work.", articleId: article.id });
+    expect((await res.json()).concept).toMatchObject({ articleId: article.id, articleTitle: "React Internals" });
+    asUser(bob);
+    const other = await add({ term: "fiber", definition: "x", articleId: article.id });
+    expect(other.status).toBe(404);
+  });
+
+  it("same term again (same article or none) is already_saved", async () => {
+    const first = await (await add({ term: "Backpressure", definition: "Slow the producer." })).json();
+    const again = await add({ term: "backpressure", definition: "Different words." });
+    expect(again.status).toBe(409);
+    expect((await again.json()).conceptId).toBe(first.concept.id);
+  });
+
+  it("needs a term and a definition, each validated", async () => {
+    expect(await (await add({ definition: "no term" })).json()).toMatchObject({ error: "invalid_input", field: "term" });
+    expect(await (await add({ term: "t", definition: "  " })).json()).toMatchObject({ field: "definition" });
+    expect(await (await add({ term: "t", definition: "x".repeat(10_001) })).json()).toMatchObject({ field: "definition" });
+    expect(await (await add({ term: "t" })).json()).toMatchObject({ field: "definition" });
+    expect(await (await add({ term: "t", definition: "d", articleId: 5 })).json()).toMatchObject({ field: "articleId" });
+  });
+});

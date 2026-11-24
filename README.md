@@ -28,10 +28,11 @@ It runs in a web browser on a laptop or a phone, and it can be installed on your
 
 | Feature | What you see |
 |---|---|
-| **Read** | Paste text, import an article from a web address, or upload a PDF or Word (.docx) file. Your articles are saved in a Library. |
+| **Read** | Paste text, import an article from a web address, or upload a PDF or Word (.docx) file. Your articles are saved in a Library, where you can rename, edit or delete them. |
 | **Explain, three levels** | Select text and tap *I don't understand*. Level 1 is a simple explanation. Level 2 uses an analogy or example. Level 3 is a detailed breakdown. You can move between levels at any time. |
+| **Bookmarks & progress** | The app remembers where you stopped and offers to continue. Bookmark any passage to **re-visit later** or mark it **important**, with a note; find them all on the Bookmarks page. |
 | **Chinese translation** | Any explanation can be translated into Mandarin Chinese. |
-| **Notebook** | Save an explained word or phrase as a "concept", with your own notes and tags. You can search and filter it. |
+| **Notebook** | Save an explained word or phrase as a "concept", or write your own, with notes and tags. Search, filter, edit and delete them. |
 | **Review** | Saved concepts come back as flashcards on a schedule. Concepts you remember easily come back less often, and ones you forget come back sooner. You can see your streak and how many concepts you have mastered. |
 | **Works offline** | Saved concepts and reviews still work without internet. Reviews sync when you're back online. |
 | **Sign-in without passwords** | You enter your email and get a sign-in link plus a 6-digit code. |
@@ -333,6 +334,7 @@ AhaReading/
 | Sign-in fails, or `/api/health` says `weak_jwt_secret` | `JWT_SECRET` / `MAGIC_LINK_SECRET` are missing or too short. Regenerate them with `openssl rand -hex 32`. |
 | "Our AI helper is temporarily unavailable" | No AI provider is set up. Use the mock (`AI_PROVIDER_CHAIN="mock"`, `AI_MOCK="1"`) or add a real API key. Restart `npm run dev` after changing `.env`. |
 | `Port 3000 is in use` | Another copy of the app is running. Stop it with Ctrl + C in its terminal. |
+| The page keeps reloading by itself (dev only) | The dev server's cache is stale. Stop it (Ctrl + C), delete the `.next/dev` folder, and run `npm run dev` again. |
 | `Another next dev server is already running` | Same as above. Only one dev server can run in this folder (this also blocks the browser tests). |
 | "Too many attempts" while signing in | Built-in protection against guessing. Wait for the timer, or restart `npm run dev` to reset it locally. |
 
