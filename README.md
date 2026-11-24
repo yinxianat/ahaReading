@@ -346,7 +346,23 @@ To see what the server thinks of its own setup, open <http://localhost:3000/api/
 
 Production runs on [Railway](https://railway.com) using `railway.json`. On each deploy, Railway builds the app
 (`npm run build`), applies database changes (`prisma migrate deploy`), starts it (`npm run start`), and checks
-`/api/health`. Production settings go in the Railway service's **Variables** tab, never in a file. Production needs:
+`/api/health`. Production settings go in the Railway service's **Variables** tab, never in a file.
+
+> **Railway's `railway.json` ("Config as Code") is deprecated.** Railway keeps reading it for existing services
+> only until 1 December 2026, and a new service may ignore it. So also set these in the service's **Settings**
+> (they are the same values as `railway.json`):
+>
+> | Setting | Value |
+> |---|---|
+> | Build command | `npm run build` |
+> | Pre-deploy command | `npx prisma migrate deploy` |
+> | Start command | `npm run start` |
+> | Healthcheck path | `/api/health` |
+> | Restart policy | On failure |
+>
+> Moving to Railway's replacement, "Infrastructure as Code", is a to-do before that date.
+
+Production needs:
 
 - `DATABASE_URL`: provided automatically by Railway's Postgres.
 - `JWT_SECRET`, `MAGIC_LINK_SECRET`: new values, different from your local ones.
