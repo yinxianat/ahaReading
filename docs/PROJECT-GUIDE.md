@@ -132,6 +132,7 @@ Each choice below was made on purpose. If you're tempted to change one, read its
 | D18 | **No AI SDKs, plain `fetch` to each provider** | One small adapter per provider, all shaped the same, no vendor libraries | You update request formats by hand when an API changes |
 | D19 | **Secrets read lazily, fail closed** | `next build` works without secrets; a missing secret refuses sign-ins instead of falling back to a known value | A missing secret only shows up when someone tries to sign in (health check catches it) |
 | D20 | **Next.js `next start`, not "standalone" build** | Simplest deployment on Railway | Slightly larger deploy |
+| D23 | **The start script applies database migrations** (`prisma migrate deploy && next start`, as in SafeHarbor) | Tables always match the code, even if the host skips a pre-deploy step (Railway's `railway.json` is deprecated and was being ignored, leaving production with no tables) | Each start takes a moment longer; a failed migration stops the app from starting, which is safer than running against the wrong schema |
 | D21 | **Uploads are converted to text on the server; the file itself is not kept** | Same safe plain-text reading view for every source; nothing to store or scan later | The original layout (columns, images, tables) is lost; to re-read the original, the user keeps their own copy |
 | D22 | **Upload sends the raw file, not a multipart form** | A file type like `application/pdf` can't be sent cross-site without a browser preflight, so other sites can't forge uploads; and the server can stop reading at the size cap | The client sets the type and the `X-File-Name` header itself |
 
@@ -1151,7 +1152,8 @@ deliberately.
    `DATABASE_URL=…/ahareading_test npm run db:deploy`, and the same for `ahareading_qa`.
 5. If existing rows need a value, write a backfill migration (`npx prisma migrate dev --create-only`, then edit its
    SQL). See `20261122193655_backfill_repetitions` for an example.
-6. On deploy, Railway applies migrations automatically (`preDeployCommand`).
+6. On deploy, migrations are applied automatically: `npm run start` runs `prisma migrate deploy` before starting
+   the server (the `railway.json` pre-deploy step does the same, while Railway still reads that file).
 
 **Add an API endpoint.** Create `src/app/api/<name>/route.js` and follow the pattern of an existing route:
 

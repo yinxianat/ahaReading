@@ -290,7 +290,7 @@ npm run lint
 | `npm test` | Run the unit and API tests |
 | `npm run test:e2e` | Run the browser tests |
 | `npm run lint` | Check the code for common mistakes |
-| `npm run build` then `npm run start` | Build and run the production version locally (stop `npm run dev` first: the build rewrites `.next` and the database client). To try a production build beside a running dev server, use `NEXT_DIST_DIR=.next-qa npx next build` and `NEXT_DIST_DIR=.next-qa npx next start -p 3200` |
+| `npm run build` then `npm run start` | Build and run the production version locally (also applies pending database changes to `DATABASE_URL`) (stop `npm run dev` first: the build rewrites `.next` and the database client). To try a production build beside a running dev server, use `NEXT_DIST_DIR=.next-qa npx next build` and `NEXT_DIST_DIR=.next-qa npx next start -p 3200` |
 | `npm run db:deploy` | Apply any new database changes |
 | `npm run db:migrate` | *(Developers changing the database design)* Create a new database change after editing `prisma/schema.prisma` |
 | `npm run check:secrets` | Scan the project for accidentally included passwords or keys |
@@ -345,8 +345,9 @@ To see what the server thinks of its own setup, open <http://localhost:3000/api/
 ## Deployment
 
 Production runs on [Railway](https://railway.com) using `railway.json`. On each deploy, Railway builds the app
-(`npm run build`), applies database changes (`prisma migrate deploy`), starts it (`npm run start`), and checks
-`/api/health`. Production settings go in the Railway service's **Variables** tab, never in a file.
+(`npm run build`), starts it (`npm run start`), and checks `/api/health`. **`npm run start` applies database
+changes itself** (`prisma migrate deploy && next start`), so a fresh Railway database gets its tables on the first
+start even if Railway skips the pre-deploy step. Running it when the database is already up to date does nothing. Production settings go in the Railway service's **Variables** tab, never in a file.
 
 > **Railway's `railway.json` ("Config as Code") is deprecated.** Railway keeps reading it for existing services
 > only until 1 December 2026, and a new service may ignore it. So also set these in the service's **Settings**
