@@ -27,6 +27,8 @@ model User {
   articles     Article[]
   explanations Explanation[]
   bookmarks    Bookmark[]
+  audioSeries  AudioSeries[]
+  audioUsage   AudioUsage[]
 }
 
 // ─── Auth ───────────────────────────────────────────
@@ -69,6 +71,7 @@ model Article {
   concepts     Concept[]
   explanations Explanation[]
   bookmarks    Bookmark[]
+  audioSeries  AudioSeries[]
 
   @@unique([userId, url])
   @@index([userId, lastReadAt])
@@ -208,4 +211,69 @@ model LogEntry {
 
   @@index([level, lastSeenAt])
   @@index([source, lastSeenAt])
+}
+
+// ─── Aha Listening (audio learning) ─────────────────
+
+// One listening request: what to listen to, at which level, in which style and part length.
+// The source text is kept (capped) so later parts can be written when first played, even if
+// the article is edited or deleted afterwards.
+model AudioSeries {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  articleId      String?
+  article        Article?  @relation(fields: [articleId], references: [id], onDelete: SetNull)
+  sourceKind     String // "article" | "selection"
+  sourceTitle    String
+  sourceText     String
+  title          String
+  level          String // "foundations" | "working" | "advanced"
+  style          String // see STYLES in lib/listen.js
+  partMinutes    Int
+  language       String    @default("en")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastListenedAt DateTime?
+
+  parts AudioPart[]
+
+  @@index([userId, updatedAt])
+}
+
+// One part of a series. The script is written when the part is first played (status
+// pending → generating → ready). Listening progress lives here: a series has one owner.
+model AudioPart {
+  id               String      @id @default(cuid())
+  seriesId         String
+  series           AudioSeries @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  order            Int // 0-based
+  title            String
+  focus            String // what this part covers (from the outline)
+  status           String      @default("pending") // "pending" | "generating" | "ready" | "failed"
+  chapters         Json? // [{title, text}] spoken script, plain text
+  words            Int         @default(0)
+  durationSec      Int         @default(0) // estimated at 150 spoken words per minute
+  startedAt        DateTime? // when generation started (stale "generating" rows can be retried)
+  generatedAt      DateTime? // when the script was written
+  audioKey         String? // object-storage key, for a future server speech provider
+  positionChapter  Int         @default(0)
+  positionSentence Int         @default(0)
+  completedAt      DateTime?
+  updatedAt        DateTime    @updatedAt
+
+  @@unique([seriesId, order])
+  @@index([generatedAt])
+}
+
+// Audio minutes used, one row per part written. Kept when a series is deleted, so deleting
+// and re-making audio can't reset the daily limit (lib/entitlements.js).
+model AudioUsage {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seconds   Int
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
 }

@@ -306,6 +306,10 @@ live AI tests); and an end-to-end flow where a rejected topic shows its message 
 
 ## 3A. Aha Listening (audio learning), proposed 2026-11-26
 
+> **Status (2026-11-26): first version built** from articles and selections, with the browser voice (A1) and
+> plan-based daily minutes (A2). Not yet: Notebook-concept and Aha Learning sources, the server voice, offline audio.
+> Listening progress lives on `AudioPart` (a series has one owner), and an `AudioUsage` ledger counts minutes.
+
 ### The idea
 Everything you can read in AhaReading, you can also **listen to**: walking, driving, cooking, eyes closed. Audio is
 **written for the ear**, not text read aloud. You choose the level, the style and how long each part is. Every part

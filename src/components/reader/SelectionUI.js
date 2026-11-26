@@ -3,7 +3,7 @@
  * The two "I don't understand" entry points: a floating pill above the
  * selection for fine pointers, a bottom action bar for touch (the iOS
  * callout sits above the selection, so nothing may float there). Both also
- * offer Bookmark, which works for any length of selection.
+ * offer Bookmark and Listen, which work for any length of selection.
  */
 import { createPortal } from "react-dom";
 import Icon from "@/components/ui/icons.js";
@@ -11,12 +11,12 @@ import Icon from "@/components/ui/icons.js";
 const TOO_LONG = "Too long — select up to a sentence or two";
 
 /**
- * @param {{snapshot:object, onActivate:() => void, onBookmark?:() => void}} props
+ * @param {{snapshot:object, onActivate:() => void, onBookmark?:() => void, onListen?:() => void}} props
  */
-export function SelectionPill({ snapshot, onActivate, onBookmark }) {
+export function SelectionPill({ snapshot, onActivate, onBookmark, onListen }) {
   if (!snapshot?.rect || typeof document === "undefined") return null;
   const { rect } = snapshot;
-  const width = (snapshot.tooLong ? 340 : 190) + (onBookmark ? 52 : 0);
+  const width = (snapshot.tooLong ? 340 : 190) + (onBookmark ? 52 : 0) + (onListen ? 52 : 0);
   const vw = document.documentElement.clientWidth;
   const left = Math.min(Math.max(8, rect.left + rect.width / 2 - width / 2), vw - width - 8);
   const above = rect.top >= 64;
@@ -47,15 +47,28 @@ export function SelectionPill({ snapshot, onActivate, onBookmark }) {
           <Icon name="bookmark" size={20} />
         </button>
       ) : null}
+      {onListen ? (
+        <button
+          type="button"
+          aria-label="Listen"
+          title="Listen"
+          onPointerDown={(e) => e.preventDefault()}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onListen}
+          className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-full border border-border bg-surface text-accent shadow-2"
+        >
+          <Icon name="headphones" size={20} />
+        </button>
+      ) : null}
     </div>,
     document.body
   );
 }
 
 /**
- * @param {{snapshot:object, onActivate:() => void, onClear:() => void, onBookmark?:() => void}} props
+ * @param {{snapshot:object, onActivate:() => void, onClear:() => void, onBookmark?:() => void, onListen?:() => void}} props
  */
-export function SelectionActionBar({ snapshot, onActivate, onClear, onBookmark }) {
+export function SelectionActionBar({ snapshot, onActivate, onClear, onBookmark, onListen }) {
   if (!snapshot) return null;
   const text = snapshot.highlightedText;
   const preview = text.length > 40 ? `${text.slice(0, 39)}…` : text;
@@ -85,6 +98,16 @@ export function SelectionActionBar({ snapshot, onActivate, onClear, onBookmark }
             className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-full border border-border text-accent"
           >
             <Icon name="bookmark" size={20} />
+          </button>
+        ) : null}
+        {onListen ? (
+          <button
+            type="button"
+            aria-label="Listen"
+            onClick={onListen}
+            className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-full border border-border text-accent"
+          >
+            <Icon name="headphones" size={20} />
           </button>
         ) : null}
         <button

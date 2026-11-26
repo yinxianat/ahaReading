@@ -23,7 +23,7 @@ export const AI_CLIENT_TIMEOUT_MS = 35000;
 
 /**
  * @param {{code?:string, message?:string, retryAfter?:number|null}} err an ApiError
- * @param {"explain"|"translate"|"save"|"login"|"code"|"articles"|"import"|"upload"|"form"|"load"|"settings"|"review"} context
+ * @param {"explain"|"translate"|"save"|"login"|"code"|"articles"|"import"|"upload"|"form"|"load"|"settings"|"review"|"listen"} context
  * @returns {ErrorView}
  */
 export function describeError(err, context = "load") {
@@ -60,6 +60,18 @@ export function describeError(err, context = "load") {
         countdownFormat: "hm",
       };
     }
+    case "audio_limit":
+      return {
+        tone: "warning",
+        message: `${serverMessage || "You've used today's audio minutes."} More in {countdown}.`,
+        sub: "Parts you've already made still play.",
+        retryAfter: err?.retryAfter || 3600,
+        waitForOnline: false,
+        recovery: "later",
+        countdownFormat: "hm",
+      };
+    case "audio_script_failed":
+      return { tone: "danger", message: "We had trouble writing this audio. Trying again usually works.", retryAfter: null, waitForOnline: false, recovery: "retry" };
     case "code_locked":
       return { tone: "danger", message: "Too many wrong codes. Send a new link to get a fresh code.", retryAfter: null, waitForOnline: false, recovery: "none" };
     case "code_invalid":
@@ -92,6 +104,9 @@ export function describeError(err, context = "load") {
         recovery: "retry",
       };
     case "content_refused":
+      if (context === "listen") {
+        return { tone: "info", message: "We can't make audio from this text. Try a different article or selection.", retryAfter: null, waitForOnline: false, recovery: "none" };
+      }
       if (context === "translate") {
         return { tone: "info", message: "We couldn't translate this explanation. You can still read it in English.", retryAfter: null, waitForOnline: false, recovery: "none" };
       }
@@ -107,6 +122,9 @@ export function describeError(err, context = "load") {
       }
       return { tone: "danger", message: "That took too long. Trying again usually works.", retryAfter: null, waitForOnline: false, recovery: "retry" };
     case "offline":
+      if (context === "listen") {
+        return { tone: "warning", message: "You're offline. Parts you've already opened still play; new parts need an internet connection.", retryAfter: null, waitForOnline: true, recovery: "retry" };
+      }
       if (ai) {
         return { tone: "warning", message: "You're offline. Explanations need an internet connection.", retryAfter: null, waitForOnline: true, recovery: "retry" };
       }

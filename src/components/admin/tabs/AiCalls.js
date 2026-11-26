@@ -54,7 +54,7 @@ export default function AiCalls({ registerRefresh }) {
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
         {select("status", "Status", ["ok", "infrastructure", "refusal", "invalid_output"])}
         {select("provider", "Provider", providers)}
-        {select("task", "Task", ["explain", "translate"])}
+        {select("task", "Task", ["explain", "translate", "listen"])}
       </div>
       <p className="mt-2 text-[13px] text-muted">Summary covers the last 24 hours; the table shows the most recent attempts.</p>
       <div className="mt-3">

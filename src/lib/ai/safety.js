@@ -102,6 +102,8 @@ const LEAK_PATTERNS = [
   /HIGHLIGHTED TEXT \(structured data/i,
   /SURROUNDING PARAGRAPH \(structured data/i,
   /PREVIOUS EXPLANATION \(context only/i,
+  /SOURCE MATERIAL \(structured data/i,
+  /SERIES PLAN \(context only/i,
 ];
 const CJK_RE = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/g;
 
@@ -138,6 +140,16 @@ function checkCommon(unwrapped) {
   const isFalsePositive = FALSE_POSITIVES.some((fp) => fp.test(unwrapped));
   if (!isFalsePositive && META_PATTERNS.some((p) => p.test(unwrapped))) return "meta_commentary";
   return null;
+}
+
+/**
+ * The checks every model output gets (prompt leak, meta-commentary), for task-specific
+ * validators outside this file.
+ * @param {string} text
+ * @returns {string|null} a reason when the text fails, else null
+ */
+export function checkOutputSafety(text) {
+  return checkCommon(String(text || "").trim());
 }
 
 /** Number of CJK ideographs in a string. */

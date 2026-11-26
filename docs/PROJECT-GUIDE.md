@@ -377,6 +377,50 @@ Files: `components/reader/{Reader,BookmarkSheet,ArticleBookmarks,SelectionUI,Art
 `components/bookmarks/Bookmarks.js`, `components/notebook/NotebookSwitch.js`, `lib/bookmarks.js`,
 `lib/client/bookmarks.js`, `api/bookmarks/**`, `api/articles/[id]/progress`.
 
+### 4.3b Aha Listening (`/listen`, `/listen/:id`)
+
+Audio **written for the ear** from an article or a selection (design doc §3A).
+
+- **Start:** **Listen** under the article title (whole article), or the headphones button next to Bookmark on a
+  selection. The setup sheet asks for the **level** (Foundations / Working knowledge / Advanced), the **style**
+  (ground up, quick summary, key concepts, stories and fun facts, real-world case, two voices, common mistakes, quiz
+  by ear) and the **part length** (2, 5, 10 or 15 minutes). Choices are remembered on the device.
+- **How audio is made:** one AI call plans the series (title + 1–8 parts, each with a focus); each part's script is
+  written **when it is first played**. The player writes the next part ahead once the current one is half done, so
+  nothing is paid for until it's used. Scripts are plain spoken text in chapters, ending with a **Recap**; quiz
+  parts contain `[pause]` lines (4 s of silence).
+- **Player:** play/pause, back 15 s, forward 30 s, previous/next chapter and part, speed 0.75–2×, voice, sleep
+  timer (10/20/30 min or end of part), play the next part automatically, a spoken cue at the start ("Part 2 of 4: …
+  About 5 minutes."), Media Session handlers for lock-screen/headphone buttons where the browser offers them, and a
+  transcript that highlights the sentence being spoken (tap a sentence to jump there).
+- **Progress and history:** the position (chapter + sentence) is saved every few seconds, on pause and when the tab is
+  hidden, so any device resumes at the same sentence. `/listen` (button on the Library) lists every series with
+  its progress; deleting one asks first.
+- **Speech (decision A1):** the browser's built-in voice (`speechSynthesis`), behind a provider interface in
+  `lib/client/speech/index.js`. The player engine (`speech/player.js`) only uses that interface, so a server voice
+  (audio files in object storage, lock-screen playback, offline) is one new provider file. Limits of the browser
+  voice: the voice depends on the device, and on iPhone speech stops when the screen locks.
+- **Daily audio minutes (decision A2):** `lib/entitlements.js` maps a user to a **plan** and the plan to limits:
+  admins (`ADMIN_EMAILS`) 240 minutes a day, everyone else 60, overridable with `AUDIO_DAILY_MINUTES_ADMIN` /
+  `AUDIO_DAILY_MINUTES_USER` (0 turns audio off for that plan). Paid plans later: add them to `PLANS` and have
+  `planFor` read the subscription; their limit reads `AUDIO_DAILY_MINUTES_<PLAN>`. Minutes are counted per UTC day
+  from the `AudioUsage` ledger (one row per part written, kept when a series is deleted, so deleting can't reset
+  the limit) plus parts being written right now. A part that doesn't fit what's left is refused with
+  `429 audio_limit` and the part stays unwritten for tomorrow. Each part also counts toward the per-user AI quota.
+- **Safety:** `lib/ai/listen-prompt.js` puts its rules first; the source text, its title and the series plan (earlier
+  AI output) are fenced as data in the user turn; level, style and language are allow-listed keys (own-key lookups,
+  so `__proto__` can't reach the prompt). Outlines must be valid JSON within the part limit; scripts are refused
+  when they contain code fences, HTML or tables, leak the prompt, or talk about themselves, and must be 45–180% of
+  the target length; Markdown symbols and URLs are stripped before anything is spoken.
+- **Timeouts:** long scripts get their own limits (part: 80 s per provider, 100 s for the chain; outline 30/50 s)
+  instead of the explain limits; the browser waits up to 110 s. A part stuck "generating" for 3 minutes can be
+  retried; two tabs never pay for the same part (the part is claimed first; others get `409 audio_generating` and
+  wait).
+
+Files: `components/listen/{ListenSetup,Player,Listening}.js`, `lib/listen.js`, `lib/listen-options.js`,
+`lib/entitlements.js`, `lib/ai/listen-prompt.js`, `lib/client/speech/{index,browser,player}.js`,
+`lib/client/listen.js`, `api/listen/**`.
+
 ### 4.4 Notebook (`/notebook`, `/notebook/:id`)
 
 - Lists saved concepts, newest first, loading 30 at a time (up to 50 per request).
@@ -480,6 +524,9 @@ concepts but unlinks them.
 | **Explanation** | One AI explanation shown to the user | `highlightedText`, `surroundingText`, `helpLevel`, `language`, `explanation`, `translationZh`, `aiProvider`, `aiModel`, `aiTokensUsed`, `aiLatencyMs`, `cacheHit`, `followUp` (null for levels 1–3; `deeper` / `big_picture` / `related` for a "Keep exploring" answer, stored with `helpLevel` 3), `basedOnId` (the explanation a follow-up continues; a plain id, not a foreign key, see below) |
 | **Concept** | A Notebook entry | `term`, `definition`, `definitionZh`, `userNotes`, `tags[]`, plus scheduling fields `nextReviewAt`, `interval`, `easeFactor`, `repetitions`, `reviewCount`, `lastReviewedAt` |
 | **Bookmark** | A marked passage in an article | `articleId`, `blockIndex`, `quote` (≤300 chars, used to find the spot again after edits), `kind` (`revisit` / `important`), `note` |
+| **AudioSeries** | One listening request | `articleId` (null if the article was deleted), `sourceKind` (`article`/`selection`), `sourceText` (capped copy, 24,000 chars), `title`, `level`, `style`, `partMinutes`, `language`, `lastListenedAt` |
+| **AudioPart** | One part of a series | `order`, `title`, `focus`, `status` (`pending`/`generating`/`ready`/`failed`), `chapters` (JSON script), `words`, `durationSec`, listening position (`positionChapter`, `positionSentence`, `completedAt`), `audioKey` (for a future server voice) |
+| **AudioUsage** | Audio minutes used | `userId`, `seconds`, `createdAt`; one row per part written; survives deleting the series |
 | **ReviewCard** | One rating of a concept (history) | `quality` 0–5, `clientId` (unique per user, makes offline re-sends harmless), `reviewedAt` |
 | **AiCall** | One attempt at one provider | `task` (explain/translate), `provider`, `model`, `status` (`ok` / `infrastructure` / `refusal` / `invalid_output` / `skipped`), `inputTokens`, `outputTokens`, `latencyMs`, `detail` (redacted error) |
 | **LogEntry** | One *kind* of problem | `level` (WARN/ERROR/CRITICAL), `source`, `message` (constant text), `fingerprint` (unique), `count`, `detail` (latest), `firstDetail`, `resolvedAt`, `alertedAt`, `lastSeenAt` |
@@ -799,6 +846,9 @@ never shows a raw crash.
 | 422 | `content_refused` | AI refused the text | *Pick different text* |
 | 429 | `rate_limited` | Too many requests (with `retryAfter`) | Countdown; button enables when time's up |
 | 429 | `daily_limit` | Daily AI quota used | Time until reset; points to Notebook/Review |
+| 429 | `audio_limit` | Today's audio minutes are used, or the next part doesn't fit what's left (with `retryAfter`, `usage`) | Countdown to reset; "Parts you've already made still play" |
+| 409 | `audio_generating` | Another request is writing this part (`retryAfter: 5`) | The player waits and asks again |
+| 502 | `audio_script_failed` | The audio script failed checks | *Try again* |
 | 500 | `server_error` | Anything unexpected (logged) | "Something went wrong on our side" + *Try again* |
 | 502 | `explanation_failed` / `translation_failed` | AI output failed checks | *Try again* (usually works) |
 | 503 | `ai_unavailable` | All AI providers failed or time ran out (`retryAfter: 30`) | Countdown + *Try again*; "Notebook and Review still work" |
@@ -1028,6 +1078,8 @@ Page files are tiny: each just renders a component from `src/components/`.
 | `next-path.js` | Accepts only safe in-app redirect paths |
 | `email-check.js` | Email validation and typo suggestions (also used by the browser) |
 | `limits.js` | All input size limits in one place (shared with the browser) |
+| `entitlements.js` | Plans and their limits (daily audio minutes); the place paid plans plug in |
+| `listen.js` / `listen-options.js` | Aha Listening: input checks, usage counting, serialising; the level/style/length choices |
 | `rate-limit.js` | Sliding-window limits, daily quotas, mailbox normalisation |
 | `redact.js` | Masks secrets and emails in anything logged |
 | `logger.js`, `alerts.js`, `mailer.js` | Error log, admin alerts, outgoing email (§11) |
@@ -1110,6 +1162,11 @@ admin.
 | 🔒 `GET /api/bookmarks` | `?kind=revisit\|important&articleId=` | `{bookmarks:[{id,articleId,articleTitle,blockIndex,quote,kind,note,createdAt}], counts:{all,revisit,important}}` | – |
 | 🔒 `POST /api/bookmarks` | `{articleId, blockIndex, quote, kind, note?}` | 201 `{bookmark}`; 409 `too_many_bookmarks` | 60/min |
 | 🔒 `PATCH / DELETE /api/bookmarks/:id` | PATCH: `{kind?, note?}` | `{bookmark}` / `{ok}` | 60/min |
+| 🔒 `GET /api/listen` | – | `{series:[{id,title,sourceTitle,level,style,partMinutes,parts:[{order,title,status,durationSec,position,completedAt}]}], usage:{usedMinutes,dailyMinutes,plan,resetsAt}}` | – |
+| 🔒 `POST /api/listen` | `{articleId, quote?, level, style, partMinutes, language?}` | 201 `{series, usage}` (plans the parts; one AI call); 429 `audio_limit` | 10/min |
+| 🔒 `GET / DELETE /api/listen/:id` | – | `{series (ready parts include chapters), usage}` / 204 | – |
+| 🔒 `POST /api/listen/:id/parts/:order` | – | `{part (with chapters), usage}`; writes the script if needed; 409 `audio_generating`; 429 `audio_limit` | 20/min |
+| 🔒 `PATCH /api/listen/:id/parts/:order` | `{chapter, sentence, completed?}` | `{part}` (saves listening progress) | 120/min |
 | 🔒 `PATCH /api/articles/:id` | `{title?, text?}` (at least one; blank title = rebuilt from text) | `{article}` | 20/min (shared with articles) |
 | 🔒 `POST /api/explain` | `{highlightedText, surroundingText?, helpLevel?, language?, articleId?, followUp?, basedOn?}`. `followUp` (`deeper` / `big_picture` / `related`) with `basedOn` (the id of an explanation of yours, about the same `highlightedText`) asks "Keep exploring"; it is always answered at level 3. Unknown mode or missing `basedOn`: 400 `invalid_input`; `basedOn` not yours or not found: 404 `not_found`; about different text: 400 | `{explanationId, explanation, helpLevel, language, followUp (null for levels 1–3), cached, provider, model}` | 30/min + daily quota (follow-ups count like any explanation) |
 | 🔒 `POST /api/translate` | `{explanationId}` | `{translation, language:"zh", cached}` | 20/min + daily quota |
@@ -1163,6 +1220,7 @@ Some conventions:
   | Keep exploring | `tests/api-explain.test.js` ("Keep exploring"), `tests/ai-followup-prompt.test.js`, `tests/admin.test.js` (metrics), `tests/explanation-text.test.js` (numbered lists) | `e2e/keep-exploring.spec.mjs` |
   | Markdown uploads | `tests/markdown.test.js` (conversion, hostile input stays fast), `tests/document-import.test.js`, `tests/api-upload.test.js` | `e2e/upload.spec.mjs` |
   | Reading format (Markdown) | `tests/article-markdown.test.js`, `tests/html-to-markdown.test.js`, `tests/api-articles.test.js` (web import) | `e2e/markdown-reading.spec.mjs` |
+  | Aha Listening | `tests/api-listen.test.js` (API, limits, prompts, checks), `tests/listen-player.test.js` (player engine) | `e2e/listen.spec.mjs` (fake browser voice) |
   | Health privacy | `tests/health.test.js` (anonymous production callers get only `{status, timestamp}`) | – |
 
 - **Document fixtures**: `tests/fixtures/documents.js` builds real PDF and .docx files in code (`makePdf`, `makeDocx`,
@@ -1200,6 +1258,8 @@ The main ones:
 | `AI_EXPLAIN_MODEL`, `AI_TRANSLATE_MODEL` | No | – | Per-task model override (applies to the provider that has that model) |
 | `AI_TIMEOUT_MS` / `AI_CHAIN_DEADLINE_MS` | No | 12000 / 25000 | Per-provider and whole-chain time limits |
 | `AI_DAILY_LIMIT_PER_USER` | No | 300 | Per-user daily AI requests |
+| `AUDIO_DAILY_MINUTES_ADMIN` / `AUDIO_DAILY_MINUTES_USER` | No | 240 / 60 | Daily audio minutes per plan (admins / everyone else); 0 = off. Future plans: `AUDIO_DAILY_MINUTES_<PLAN>` |
+| `AI_LISTEN_MODEL` | No | – | Model override for audio scripts |
 | `AI_DAILY_TOKEN_BUDGET` | No | none | App-wide daily token ceiling |
 | `AI_PRICE_OVERRIDES` | No | – | Custom prices for cost estimates |
 | `AI_MOCK` | Local only | – | `1` enables the mock provider (ignored in production) |

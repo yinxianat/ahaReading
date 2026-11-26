@@ -34,6 +34,14 @@ const PATHS = {
   shield: <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />,
   plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
   share: <><path d="M12 3v13" /><path d="m7 8 5-5 5 5" /><path d="M5 12v8h14v-8" /></>,
+  headphones: <><path d="M3 18v-6a9 9 0 0 1 18 0v6" /><path d="M21 19a2 2 0 0 1-2 2h-1v-6h3z" /><path d="M3 19a2 2 0 0 0 2 2h1v-6H3z" /></>,
+  play: <path d="M7 4v16l13-8z" />,
+  pause: <><path d="M8 5v14" /><path d="M16 5v14" /></>,
+  back15: <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /><path d="M10 10v5" /><path d="M14 10h-1.5v2h1a1.5 1.5 0 0 1 0 3H12" /></>,
+  forward30: <><path d="M21 12a9 9 0 1 1-3-6.7L21 8" /><path d="M21 3v5h-5" /><path d="M8.5 10h2a1 1 0 0 1 0 2h-1 1a1 1 0 0 1 0 2h-2" /><rect x="13" y="10" width="3" height="4" rx="1.5" /></>,
+  skipBack: <><path d="M19 20 9 12l10-8z" /><path d="M5 19V5" /></>,
+  skipForward: <><path d="m5 4 10 8-10 8z" /><path d="M19 5v14" /></>,
+  moon: <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z" />,
 };
 
 /**

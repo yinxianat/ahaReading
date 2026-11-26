@@ -16,7 +16,7 @@ import { trimToLastSentence } from "./safety.js";
 export const REGISTRY = { anthropic, openai, google, mock };
 
 const DEFAULT_CHAIN = "anthropic,openai,google";
-const TASK_MODEL_ENV = { explain: "AI_EXPLAIN_MODEL", translate: "AI_TRANSLATE_MODEL" };
+const TASK_MODEL_ENV = { explain: "AI_EXPLAIN_MODEL", translate: "AI_TRANSLATE_MODEL", listen: "AI_LISTEN_MODEL" };
 const STATUS = {
   [ErrorKind.INFRASTRUCTURE]: "infrastructure",
   [ErrorKind.REFUSAL]: "refusal",
@@ -153,12 +153,16 @@ function attempt(provider, params, timeoutMs) {
  * Ledger rows and warnings are written without awaiting: a slow database must not
  * add to AI latency.
  *
- * @param {{task: "explain"|"translate", system: string, userMessage: string, model?: string, maxTokens?: number,
+ * Long tasks (audio scripts) pass `timeoutMs` / `deadlineMs` to replace AI_TIMEOUT_MS /
+ * AI_CHAIN_DEADLINE_MS for that call only (each capped at 120 s).
+ *
+ * @param {{task: "explain"|"translate"|"listen", system: string, userMessage: string, model?: string, maxTokens?: number,
+ *          timeoutMs?: number, deadlineMs?: number,
  *          validate?: (text: string) => ({valid: boolean, reason?: string, text?: string})}} params
  * @returns {Promise<{text: string, provider: string, model: string, tokensUsed: number, latencyMs: number}>}
  * @throws {ProviderError}
  */
-export async function runChain({ task, system, userMessage, model, maxTokens, validate }) {
+export async function runChain({ task, system, userMessage, model, maxTokens, validate, timeoutMs, deadlineMs }) {
   const chain = resolveChain();
   if (chain.length === 0) {
     void logger.error("ai", "No AI providers configured", { chain: chainNames().join(",") });
@@ -170,7 +174,9 @@ export async function runChain({ task, system, userMessage, model, maxTokens, va
   }
 
   const started = Date.now();
-  const deadline = started + chainDeadlineMs();
+  const cap = (ms, fallback) => (Number.isFinite(ms) && ms >= 1000 ? Math.min(ms, 120_000) : fallback);
+  const deadline = started + cap(deadlineMs, chainDeadlineMs());
+  const perAttemptMs = cap(timeoutMs, providerTimeoutMs());
   let lastError = null;
   const attempts = [];
 
@@ -187,7 +193,7 @@ export async function runChain({ task, system, userMessage, model, maxTokens, va
 
     const attemptStart = Date.now();
     try {
-      const result = await attempt(provider, { system, userMessage, model: selected, maxTokens }, Math.min(providerTimeoutMs(), remaining));
+      const result = await attempt(provider, { system, userMessage, model: selected, maxTokens }, Math.min(perAttemptMs, remaining));
       const latencyMs = Date.now() - attemptStart;
       const tokens = result.tokensUsed || 0;
       const usage = { tokens, inputTokens: result.inputTokens, outputTokens: result.outputTokens };

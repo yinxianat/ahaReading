@@ -18,6 +18,8 @@ const ITEMS = [
 function isActive(pathname, href) {
   // Bookmarks live beside Notebook concepts (one "things I kept" tab).
   if (href === "/notebook" && (pathname === "/bookmarks" || pathname.startsWith("/bookmarks/"))) return true;
+  // Listening is made from reading (Library → Listening).
+  if (href === "/read" && (pathname === "/listen" || pathname.startsWith("/listen/"))) return true;
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 

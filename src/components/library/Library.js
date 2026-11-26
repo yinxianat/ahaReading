@@ -425,7 +425,14 @@ function Recent() {
 export default function Library() {
   return (
     <main id="main" className="app-main mx-auto max-w-[720px] px-4 md:px-6">
-      <TopBar title="Read" />
+      <TopBar
+        title="Read"
+        actions={
+          <Button variant="secondary" icon="headphones" href="/listen">
+            Listening
+          </Button>
+        }
+      />
       <NewReading />
       <Recent />
     </main>

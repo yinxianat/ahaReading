@@ -27,6 +27,7 @@ import { SelectionPill, SelectionActionBar } from "./SelectionUI.js";
 import ExplainPanel from "./ExplainPanel.js";
 import BookmarkSheet from "./BookmarkSheet.js";
 import ArticleBookmarks from "./ArticleBookmarks.js";
+import ListenSetup from "@/components/listen/ListenSetup.js";
 import { plainPreview } from "@/components/notebook/ConceptCard.js";
 
 const SIZES = { S: 16, M: 18, L: 20 };
@@ -177,6 +178,8 @@ export default function Reader({ id }) {
   const [bookmarks, setBookmarks] = useState([]);
   // null | {mode:"create", blockIndex, quote} | {mode:"edit", bookmark}
   const [bmSheet, setBmSheet] = useState(null);
+  // Listen setup: {quote: null} for the whole article, or the selected text.
+  const [listen, setListen] = useState(null);
   const [bmListOpen, setBmListOpen] = useState(false);
   const [resume, setResume] = useState(null);
 
@@ -308,6 +311,16 @@ export default function Reader({ id }) {
       setTap(null);
       window.getSelection()?.removeAllRanges();
       setBmSheet({ mode: "create", blockIndex: snap.paragraphIndexes[0], quote: snap.highlightedText });
+    },
+    [setPending]
+  );
+
+  const startListen = useCallback(
+    (snap) => {
+      setPending(null);
+      setTap(null);
+      window.getSelection()?.removeAllRanges();
+      setListen({ quote: snap?.highlightedText || null });
     },
     [setPending]
   );
@@ -539,6 +552,10 @@ export default function Reader({ id }) {
                     <Link href={`/read/${encodeURIComponent(a.id)}/edit`} className="-my-3 inline-flex min-h-[44px] items-center gap-1 px-1 align-middle font-semibold">
                       <Icon name="pencil" size={14} /> Edit
                     </Link>
+                    {" · "}
+                    <button type="button" onClick={() => startListen(null)} className="-my-3 inline-flex min-h-[44px] items-center gap-1 px-1 align-middle font-semibold text-accent">
+                      <Icon name="headphones" size={14} /> Listen
+                    </button>
                   </>
                 ) : null}
               </p>
@@ -611,12 +628,20 @@ export default function Reader({ id }) {
         </main>
       </div>
 
-      {showPill ? <SelectionPill snapshot={pending} onActivate={() => openPanel(pending)} onBookmark={article.fromCache ? undefined : () => startBookmark(pending)} /> : null}
+      {showPill ? (
+        <SelectionPill
+          snapshot={pending}
+          onActivate={() => openPanel(pending)}
+          onBookmark={article.fromCache ? undefined : () => startBookmark(pending)}
+          onListen={article.fromCache ? undefined : () => startListen(pending)}
+        />
+      ) : null}
       {showBar ? (
         <SelectionActionBar
           snapshot={pending}
           onActivate={() => openPanel(pending)}
           onBookmark={article.fromCache ? undefined : () => startBookmark(pending)}
+          onListen={article.fromCache ? undefined : () => startListen(pending)}
           onClear={() => {
             setPending(null);
             setTap(null);
@@ -666,6 +691,8 @@ export default function Reader({ id }) {
           onClose={() => setBmSheet(null)}
         />
       ) : null}
+
+      {listen && a?.id ? <ListenSetup articleId={a.id} quote={listen.quote} language={user?.locale === "zh" ? "zh" : "en"} onClose={() => setListen(null)} /> : null}
 
       <ConceptPreview preview={preview} isDesktop={isDesktop} now={now} onClose={() => setPreview(null)} onExplainAgain={explainAgain} />
     </>
