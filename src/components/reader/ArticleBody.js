@@ -6,7 +6,8 @@
  * selection offsets in selection.js work the same for every kind. Content is
  * rendered as React text only — never HTML.
  */
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
+import { CELL_SEPARATOR } from "@/lib/article-markdown.js";
 
 const WORD = /[\p{L}\p{N}]/u;
 
@@ -51,50 +52,124 @@ function segments(text, marks, active, tap) {
   const out = [];
   let pos = 0;
   for (const s of all) {
-    if (s.start > pos) out.push({ kind: "text", text: text.slice(pos, s.start) });
-    out.push({ ...s, text: text.slice(s.start, s.end) });
+    if (s.start > pos) out.push({ kind: "text", start: pos, end: s.start });
+    out.push(s);
     pos = s.end;
   }
-  if (pos < text.length) out.push({ kind: "text", text: text.slice(pos) });
+  if (pos < text.length) out.push({ kind: "text", start: pos, end: text.length });
   return out;
 }
 
-function Inline({ index, text, marks, active, tap, onConceptOpen }) {
-  const parts = segments(text, marks, active, tap);
-  return parts.map((s, i) => {
-        if (s.kind === "text") return s.text;
-        if (s.kind === "concept") {
-          const open = (e) => {
-            // A drag-select that ends on a mark is a selection, not a tap.
-            const sel = window.getSelection();
-            if (sel && !sel.isCollapsed) return;
-            e.stopPropagation();
-            onConceptOpen?.(s.concept, e.currentTarget.getBoundingClientRect(), index, s.start, s.end);
-          };
-          return (
-            <mark
-              key={i}
-              className="concept"
-              role="button"
-              tabIndex={0}
-              aria-label={`Saved concept: ${s.concept.term}`}
-              onClick={open}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  open(e);
-                }
-              }}
-            >
-              {s.text}
-            </mark>
-          );
-        }
-        return (
-          <mark key={i} className={s.kind === "active" ? "active" : undefined} data-tap={s.kind === "tap" ? "" : undefined}>
-            {s.text}
-          </mark>
-        );
+const EMPTY = [];
+
+/** One run of text with its formatting (bold, italics, strikethrough, inline code, line break). */
+function run(text, covering, key) {
+  if (covering.some((s) => s.kind === "br")) {
+    return (
+      <Fragment key={key}>
+        {text}
+        <br />
+      </Fragment>
+    );
+  }
+  let node = text;
+  if (covering.some((s) => s.kind === "code")) node = <code className="rounded-sm bg-surface-2 px-1 py-px font-mono text-[0.88em]">{node}</code>;
+  if (covering.some((s) => s.kind === "del")) node = <del>{node}</del>;
+  if (covering.some((s) => s.kind === "em")) node = <em>{node}</em>;
+  if (covering.some((s) => s.kind === "strong")) node = <strong className="font-semibold">{node}</strong>;
+  return <Fragment key={key}>{node}</Fragment>;
+}
+
+function linkFor(span, children, key) {
+  const className = span.kind === "image" ? "aha-img-chip" : "text-accent underline underline-offset-2";
+  if (!span.href) return <span key={key} className={className}>{children}</span>;
+  return (
+    <a key={key} href={span.href} target="_blank" rel="noopener noreferrer nofollow" className={className}>
+      {children}
+    </a>
+  );
+}
+
+/**
+ * text[start, end) with its formatting spans. Without spans it stays a plain string, so older
+ * articles render exactly as before. Consecutive runs inside one link share one <a>.
+ */
+function formatted(text, start, end, spans) {
+  if (!spans.length) return text.slice(start, end);
+  const cuts = new Set([start, end]);
+  for (const s of spans) {
+    if (s.end > start && s.start < end) {
+      cuts.add(Math.max(s.start, start));
+      cuts.add(Math.min(s.end, end));
+    }
+  }
+  const points = [...cuts].sort((a, b) => a - b);
+  const out = [];
+  let group = null;
+  const flush = () => {
+    if (group) out.push(linkFor(group.span, group.runs, `l${group.at}`));
+    group = null;
+  };
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const covering = spans.filter((s) => s.start <= a && s.end >= b);
+    const link = covering.find((s) => s.kind === "link" || s.kind === "image");
+    const node = run(text.slice(a, b), covering, `r${a}`);
+    if (link) {
+      if (group?.span !== link) {
+        flush();
+        group = { span: link, runs: [], at: a };
+      }
+      group.runs.push(node);
+    } else {
+      flush();
+      out.push(node);
+    }
+  }
+  flush();
+  return out;
+}
+
+function Inline({ index, text, spans = EMPTY, marks, active, tap, onConceptOpen, from = 0, to = text.length }) {
+  const parts = segments(text, marks, active, tap)
+    .map((s) => ({ ...s, a: Math.max(s.start, from), b: Math.min(s.end, to) }))
+    .filter((s) => s.b > s.a);
+  return parts.map((s) => {
+    const content = formatted(text, s.a, s.b, spans);
+    if (s.kind === "text") return <Fragment key={`t${s.a}`}>{content}</Fragment>;
+    if (s.kind === "concept") {
+      const open = (e) => {
+        // A drag-select that ends on a mark is a selection, not a tap.
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) return;
+        e.stopPropagation();
+        onConceptOpen?.(s.concept, e.currentTarget.getBoundingClientRect(), index, s.start, s.end);
+      };
+      return (
+        <mark
+          key={`c${s.a}`}
+          className="concept"
+          role="button"
+          tabIndex={0}
+          aria-label={`Saved concept: ${s.concept.term}`}
+          onClick={open}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              open(e);
+            }
+          }}
+        >
+          {content}
+        </mark>
+      );
+    }
+    return (
+      <mark key={`m${s.a}`} className={s.kind === "active" ? "active" : undefined} data-tap={s.kind === "tap" ? "" : undefined}>
+        {content}
+      </mark>
+    );
   });
 }
 
@@ -146,7 +221,7 @@ function CodeBlock({ index, children, extraClass = "" }) {
 }
 
 const Block = memo(function Block({ index, block, marks, active, tap, onConceptOpen, bookmark }) {
-  const inline = <Inline index={index} text={block.text} marks={marks} active={active} tap={tap} onConceptOpen={onConceptOpen} />;
+  const inline = <Inline index={index} text={block.text} spans={block.spans || EMPTY} marks={marks} active={active} tap={tap} onConceptOpen={onConceptOpen} />;
   // A bookmark only adds a class to the [data-p] element, so its textContent (which
   // selection offsets rely on) is unchanged.
   const bm = bookmark ? ` bm bm-${bookmark}` : "";
@@ -161,9 +236,40 @@ const Block = memo(function Block({ index, block, marks, active, tap, onConceptO
   }
   if (block.type === "li") {
     return (
-      <li data-p={index} value={block.ordered && block.number ? block.number : undefined} className={`mb-2 pl-1 break-anywhere${bm}`}>
+      <li
+        data-p={index}
+        value={block.ordered && block.number ? block.number : undefined}
+        className={`mb-2 pl-1 break-anywhere${bm}`}
+        style={block.depth ? { marginLeft: `${block.depth * 1.5}em` } : undefined}
+      >
         {inline}
       </li>
+    );
+  }
+  if (block.type === "quote") {
+    return (
+      <p data-p={index} className={`mb-3 break-anywhere${bm}`}>
+        {inline}
+      </p>
+    );
+  }
+  if (block.type === "row") {
+    const Cell = block.header ? "th" : "td";
+    // Cells are separated by a visually hidden " · " that is part of the row's text, so
+    // selection offsets, screen readers and the AI read "a · b" rather than "ab".
+    return (
+      <tr data-p={index} className={bm.trim() || undefined}>
+        {block.cells.map(([from, to], k) => (
+          <Cell
+            key={k}
+            className={`border border-border px-3 py-2 align-top break-anywhere ${block.header ? "bg-surface-2 font-semibold" : ""}`}
+            style={{ textAlign: block.align?.[k] || "left" }}
+          >
+            {k > 0 ? <span className="sr-only">{CELL_SEPARATOR}</span> : null}
+            <Inline index={index} text={block.text} spans={block.spans || EMPTY} marks={marks} active={active} tap={tap} onConceptOpen={onConceptOpen} from={from} to={to} />
+          </Cell>
+        ))}
+      </tr>
     );
   }
   return (
@@ -173,14 +279,16 @@ const Block = memo(function Block({ index, block, marks, active, tap, onConceptO
   );
 });
 
-/** Items of the same source list share one <ul>/<ol>. */
+/** Items of one list share a <ul>/<ol>; rows of one table a <table>; paragraphs of one quote a <blockquote>. */
 function groupBlocks(blocks) {
   const groups = [];
   blocks.forEach((block, index) => {
     const last = groups[groups.length - 1];
-    if (block.type === "li" && last?.list && last.id === block.list) last.items.push(index);
-    else if (block.type === "li") groups.push({ list: true, id: block.list, ordered: Boolean(block.ordered), items: [index] });
-    else groups.push({ list: false, items: [index] });
+    const kind = block.type === "li" ? "list" : block.type === "row" ? "table" : block.type === "quote" ? "quote" : null;
+    const id = kind === "list" ? block.list : kind === "table" ? block.table : kind === "quote" ? block.quote : null;
+    if (kind && last?.kind === kind && last.id === id) last.items.push(index);
+    else if (kind) groups.push({ kind, list: kind === "list", id, ordered: Boolean(block.ordered), items: [index] });
+    else groups.push({ kind: null, list: false, items: [index] });
   });
   return groups;
 }
@@ -214,6 +322,25 @@ export default function ArticleBody({ blocks, concepts, activeRanges, tapRanges,
       onPointerUp={onPointerUp}
     >
       {groups.map((g) => {
+        if (g.kind === "table") {
+          const head = g.items.filter((i) => blocks[i].header);
+          const body = g.items.filter((i) => !blocks[i].header);
+          return (
+            <div key={`t${g.items[0]}`} className="scroll-visible mb-6 max-w-full overflow-x-auto">
+              <table className="w-full border-collapse font-sans text-[0.9em]">
+                {head.length ? <thead>{head.map(render)}</thead> : null}
+                <tbody>{body.map(render)}</tbody>
+              </table>
+            </div>
+          );
+        }
+        if (g.kind === "quote") {
+          return (
+            <blockquote key={`q${g.items[0]}`} className="mb-6 border-l-4 border-border pl-4 text-muted">
+              {g.items.map(render)}
+            </blockquote>
+          );
+        }
         if (!g.list) return render(g.items[0]);
         const List = g.ordered ? "ol" : "ul";
         return (

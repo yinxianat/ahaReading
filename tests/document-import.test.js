@@ -7,6 +7,7 @@ import {
 import { itemsToLines, dropPageFurniture, linesToBlocks, parseDocument, tidy } from "@/lib/document-parse.js";
 import { parseGateState } from "@/lib/document-sandbox.js";
 import { parseArticleBlocks } from "@/lib/article-blocks.js";
+import { markdownUnits } from "@/lib/article-markdown.js";
 import { makePdf, makeDocx, makeDenseDocx, makeFlateBombPdf, PROSE } from "./fixtures/documents.js";
 
 const blocksOf = async (bytes, opts) => parseArticleBlocks((await extractDocument(bytes, opts)).text);
@@ -200,23 +201,32 @@ describe("Word (.docx) extraction", () => {
     expect(result.text).not.toContain("\u2191");
   });
 
-  it("keeps headings, paragraphs and bullets; the first heading is the title", async () => {
+  it("keeps headings, paragraphs, bullets and bold as Markdown; the first heading is the title", async () => {
     const docx = await makeDocx([
       { heading: "Consensus 101" },
       { p: PROSE },
       { heading: "Why it matters", level: 2 },
       { bullet: "safety" },
       { bullet: "liveness" },
+      { p: "A ", strong: "quorum", after: " is a majority." },
       { p: "Tags like <script>alert(1)</script> stay plain text." },
     ]);
     const result = await extractDocument(docx, { fileName: "consensus.docx" });
     expect(result.kind).toBe("docx");
+    expect(result.format).toBe("markdown");
     expect(result.title).toBe("Consensus 101");
-    const blocks = parseArticleBlocks(result.text);
-    expect(blocks).toContainEqual({ type: "paragraph", text: PROSE });
-    expect(blocks).toContainEqual({ type: "heading", level: 2, text: "Why it matters" });
-    expect(blocks.find((b) => b.type === "list")?.items).toEqual(["safety", "liveness"]);
-    expect(result.text).toContain("<script>alert(1)</script> stay plain text.");
+    expect(result.text).not.toMatch(/^# Consensus 101/);
+    const units = markdownUnits(result.text);
+    expect(units.map((u) => [u.type, u.text])).toEqual([
+      ["p", PROSE],
+      ["h", "Why it matters"],
+      ["li", "safety"],
+      ["li", "liveness"],
+      ["p", "A quorum is a majority."],
+      ["p", "Tags like <script>alert(1)</script> stay plain text."],
+    ]);
+    const bold = units[4].spans.find((s) => s.kind === "strong");
+    expect(units[4].text.slice(bold.start, bold.end)).toBe("quorum");
   });
 
   it("a zip that isn't a Word document is unsupported", async () => {
@@ -358,15 +368,19 @@ describe("Markdown (.md) uploads", () => {
   const enc = (s) => new TextEncoder().encode(s);
   const MD = `# Consensus notes\n\n${PROSE} It uses **leaders** and [terms](https://raft.github.io).\n\n- safety\n- liveness\n`;
 
-  it("a .md file becomes a readable article; the opening heading is the title, shown once", async () => {
+  it("a .md file keeps its original Markdown; the opening heading is the title, shown once", async () => {
+    const { markdownUnits } = await import("@/lib/article-markdown.js");
     const r = await extractDocument(enc(MD), { fileName: "notes.md" });
-    expect(r.kind).toBe("markdown");
-    expect(r.title).toBe("Consensus notes");
-    const blocks = parseArticleBlocks(r.text);
-    expect(blocks[0].type).toBe("paragraph");
-    expect(blocks[0].text).toContain("It uses leaders and terms.");
-    expect(blocks[1]).toEqual({ type: "list", ordered: false, items: ["safety", "liveness"] });
-    expect(r.text).not.toMatch(/\*\*|\]\(|https:/);
+    expect(r).toMatchObject({ kind: "markdown", format: "markdown", title: "Consensus notes" });
+    // Formatting is kept as written; the reader draws it.
+    expect(r.text).toContain("**leaders**");
+    expect(r.text).toContain("[terms](https://raft.github.io)");
+    expect(r.text).not.toMatch(/^# Consensus notes/m);
+    const units = markdownUnits(r.text);
+    expect(units[0]).toMatchObject({ type: "p" });
+    expect(units[0].text).toContain("It uses leaders and terms.");
+    expect(units[0].spans).toContainEqual({ start: expect.any(Number), end: expect.any(Number), kind: "strong" });
+    expect(units.slice(1).map((u) => [u.type, u.text])).toEqual([["li", "safety"], ["li", "liveness"]]);
   });
 
   it("recognised by declared type alone (text/markdown), or by .markdown; title falls back to the file name", async () => {

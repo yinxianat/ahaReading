@@ -1,12 +1,17 @@
 import prisma from "@/lib/db.js";
 import { safeFetch, UrlGuardError } from "@/lib/url-guard.js";
-import { extractReadable, normalizePlainText } from "@/lib/extract.js";
+import { extractReadableMarkdown, normalizePlainText } from "@/lib/extract.js";
 import { extractDocument } from "@/lib/document-import.js";
 import { articlePlainText, parseArticleBlocks } from "@/lib/article-blocks.js";
+import { looksLikeMarkdown, markdownPlainText, markdownUnits } from "@/lib/article-markdown.js";
 import { MAX_ARTICLE_CHARS, MAX_TITLE_CHARS } from "@/lib/limits.js";
 import { badRequest, hasNul } from "@/lib/http.js";
 
-/** Article content is capped on write; it is stored in the article-blocks.js format. */
+/**
+ * Article content is capped on write. `format` says how it's stored: "markdown" keeps the original
+ * formatting (article-markdown.js); "blocks" is plain block text (article-blocks.js) for PDFs, plain
+ * pastes and older articles.
+ */
 export const MAX_CONTENT_CHARS = MAX_ARTICLE_CHARS;
 export { MAX_TITLE_CHARS };
 // Read a little extra so block markers ("## ", "```") can be stripped from the excerpt.
@@ -20,13 +25,37 @@ const DUPLICATE_UPLOAD_WINDOW_MS = 10 * 60_000;
  * @param {object} a Article row
  */
 export function serializeArticle(a) {
-  return { id: a.id, title: a.title, domain: a.domain, url: a.url, fileName: a.fileName ?? null, content: a.content, createdAt: a.createdAt, lastReadAt: a.lastReadAt, readBlock: a.readBlock ?? null, readPercent: a.readPercent ?? 0 };
+  return { id: a.id, title: a.title, domain: a.domain, url: a.url, fileName: a.fileName ?? null, format: a.format ?? "blocks", content: a.content, createdAt: a.createdAt, lastReadAt: a.lastReadAt, readBlock: a.readBlock ?? null, readPercent: a.readPercent ?? 0 };
 }
 
-function titleFromText(content) {
-  const first = parseArticleBlocks(content.slice(0, 2000)).find((b) => b.type !== "code");
-  const line = (first?.type === "list" ? first.items[0] : first?.text) || "Untitled";
+function titleFromText(content, format = "blocks") {
+  let line;
+  if (format === "markdown") {
+    line = markdownUnits(content.slice(0, 4000)).find((u) => u.type !== "code" && u.type !== "row")?.text;
+  } else {
+    const first = parseArticleBlocks(content.slice(0, 2000)).find((b) => b.type !== "code");
+    line = first?.type === "list" ? first.items[0] : first?.text;
+  }
+  line = (line || "Untitled").replace(/\s+/g, " ").trim();
   return line.length > 80 ? `${line.slice(0, 77).trimEnd()}…` : line;
+}
+
+/**
+ * Content and format for text the user wrote or pasted. `markdown`: true keeps it as Markdown,
+ * false stores plain text, undefined decides from the text (looksLikeMarkdown).
+ * @param {string} text
+ * @param {boolean} [markdown]
+ * @returns {{content: string, format: "markdown"|"blocks"}}
+ */
+export function contentFromText(text, markdown) {
+  const asMarkdown = markdown === undefined ? looksLikeMarkdown(text) : Boolean(markdown);
+  if (!asMarkdown) return { content: normalizePlainText(text).text.slice(0, MAX_CONTENT_CHARS), format: "blocks" };
+  const content = String(text)
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, MAX_CONTENT_CHARS);
+  return { content, format: "markdown" };
 }
 
 /**
@@ -63,15 +92,21 @@ export function parseArticleTitle(title) {
  * Saved concepts stay linked; their highlights are found again by term in the new text.
  * @param {string} userId
  * @param {string} id
- * @param {{title?: string|null, text?: string}} changes already validated; a key that is absent is unchanged
+ * @param {{title?: string|null, text?: string, markdown?: boolean}} changes already validated; a key that is
+ *   absent is unchanged. `markdown` (with `text`) switches the format; without it the format is kept.
  * @returns {Promise<object|null>} the updated article, or null when it isn't the user's
  */
 export async function updateArticle(userId, id, changes) {
   const data = {};
-  if (changes.text !== undefined) data.content = normalizePlainText(changes.text).text.slice(0, MAX_CONTENT_CHARS);
+  const current = await prisma.article.findFirst({ where: { id, userId }, select: { content: true, format: true } });
+  if (!current) return null;
+  if (changes.text !== undefined) {
+    const keep = changes.markdown === undefined ? current.format === "markdown" : changes.markdown;
+    Object.assign(data, contentFromText(changes.text, keep));
+  }
   if (changes.title !== undefined) {
-    const content = data.content ?? (await prisma.article.findFirst({ where: { id, userId }, select: { content: true } }))?.content ?? "";
-    data.title = (changes.title || titleFromText(content)).slice(0, MAX_TITLE_CHARS);
+    const content = data.content ?? current.content ?? "";
+    data.title = (changes.title || titleFromText(content, data.format ?? current.format)).slice(0, MAX_TITLE_CHARS);
   }
   const { count } = await prisma.article.updateMany({ where: { id, userId }, data });
   if (count === 0) return null;
@@ -81,17 +116,19 @@ export async function updateArticle(userId, id, changes) {
 /**
  * Save pasted text as a new article.
  * @param {string} userId
- * @param {{text: string, title?: string|null}} input already type-checked by the route
+ * @param {{text: string, title?: string|null, markdown?: boolean}} input already type-checked by the route;
+ *   `markdown` as in contentFromText
  */
-export async function createPastedArticle(userId, { text, title }) {
-  const { text: content } = normalizePlainText(text);
+export async function createPastedArticle(userId, { text, title, markdown }) {
+  const { content, format } = contentFromText(text, markdown);
   return prisma.article.create({
     data: {
       userId,
       url: null,
       domain: null,
-      title: (title || titleFromText(content)).slice(0, MAX_TITLE_CHARS),
-      content: content.slice(0, MAX_CONTENT_CHARS),
+      title: (title || titleFromText(content, format)).slice(0, MAX_TITLE_CHARS),
+      content,
+      format,
     },
   });
 }
@@ -107,7 +144,7 @@ export async function createPastedArticle(userId, { text, title }) {
  */
 export async function createUploadedArticle(userId, { bytes, fileName, contentType, signal }) {
   const doc = await extractDocument(bytes, { fileName, contentType, signal });
-  const data = { fileName: fileName || null, title: doc.title, content: doc.text };
+  const data = { fileName: fileName || null, title: doc.title, content: doc.text, format: doc.format || "blocks" };
   const same = await prisma.article.findFirst({
     where: { userId, url: null, ...data, createdAt: { gte: new Date(Date.now() - DUPLICATE_UPLOAD_WINDOW_MS) } },
     select: { id: true },
@@ -126,8 +163,12 @@ export async function createUploadedArticle(userId, { bytes, fileName, contentTy
 export async function importArticleFromUrl(userId, rawUrl, { fetcher = safeFetch } = {}) {
   const fetched = await fetcher(rawUrl);
   const isHtml = !fetched.contentType.startsWith("text/plain");
-  const extracted = isHtml ? extractReadable(fetched.text) : { ...normalizePlainText(fetched.text), title: "" };
-  if (extracted.text.length < 50) {
+  // Web pages keep their formatting as Markdown; plain-text pages stay plain blocks.
+  const extracted = isHtml
+    ? (({ title, markdown }) => ({ title, text: markdown, format: "markdown" }))(extractReadableMarkdown(fetched.text, { baseUrl: fetched.finalUrl }))
+    : { ...normalizePlainText(fetched.text), title: "", format: "blocks" };
+  const readable = extracted.format === "markdown" ? markdownPlainText(extracted.text) : extracted.text;
+  if (readable.length < 50) {
     throw new UrlGuardError(
       "url_not_readable",
       "We couldn't find readable text on that page (it may need JavaScript or a login). Paste the text instead.",
@@ -140,6 +181,7 @@ export async function importArticleFromUrl(userId, rawUrl, { fetcher = safeFetch
     title: (extracted.title || finalUrl.hostname).slice(0, MAX_TITLE_CHARS),
     domain: finalUrl.hostname.slice(0, 255),
     content: extracted.text.slice(0, MAX_CONTENT_CHARS),
+    format: extracted.format,
     lastReadAt: new Date(),
   };
   return prisma.article.upsert({
@@ -156,7 +198,7 @@ export async function importArticleFromUrl(userId, rawUrl, { fetcher = safeFetch
  */
 export async function listArticles(userId) {
   const rows = await prisma.$queryRaw`
-    SELECT a."id", a."title", a."domain", a."url", a."fileName", a."lastReadAt", a."readPercent",
+    SELECT a."id", a."title", a."domain", a."url", a."fileName", a."format", a."lastReadAt", a."readPercent",
            LEFT(COALESCE(a."content", ''), ${EXCERPT_READ_CHARS}) AS "excerpt",
            (SELECT COUNT(*)::int FROM "Concept" c WHERE c."articleId" = a."id" AND c."userId" = ${userId}) AS "conceptCount"
     FROM "Article" a
@@ -172,7 +214,7 @@ export async function listArticles(userId) {
     readPercent: Number(r.readPercent) || 0,
     lastReadAt: r.lastReadAt,
     conceptCount: Number(r.conceptCount) || 0,
-    excerpt: r.excerpt ? articlePlainText(r.excerpt).replace(/\s+/g, " ").trim().slice(0, EXCERPT_CHARS) : "",
+    excerpt: r.excerpt ? (r.format === "markdown" ? markdownPlainText(r.excerpt) : articlePlainText(r.excerpt)).replace(/\s+/g, " ").trim().slice(0, EXCERPT_CHARS) : "",
   }));
 }
 

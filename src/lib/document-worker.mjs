@@ -4,14 +4,14 @@
  * Next), so it and everything it imports use relative paths only.
  *
  * In: workerData {bytes: ArrayBuffer, kind: "pdf"|"zip", deadlineMs}.
- * Out: one message, {ok: true, title, text} or {ok: false, code, message, detail}.
+ * Out: one message, {ok: true, title, text, format} or {ok: false, code, message, detail}.
  */
 import { parentPort, workerData } from "node:worker_threads";
 import { parseDocument } from "./document-parse.js";
 
 try {
-  const { title, text } = await parseDocument(new Uint8Array(workerData.bytes), workerData.kind, { deadlineMs: workerData.deadlineMs });
-  parentPort.postMessage({ ok: true, title, text });
+  const { title, text, format } = await parseDocument(new Uint8Array(workerData.bytes), workerData.kind, { deadlineMs: workerData.deadlineMs });
+  parentPort.postMessage({ ok: true, title, text, format: format === "markdown" ? "markdown" : "blocks" });
 } catch (err) {
   parentPort.postMessage({
     ok: false,

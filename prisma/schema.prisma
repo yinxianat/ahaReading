@@ -62,6 +62,7 @@ model Article {
   readBlock   Int? // block index the reader last stopped at (reading progress); null = not started
   readPercent Int      @default(0) // 0..100, how far down the article the reader got
   content     String? // the readable text the user is reading (capped on write)
+  format      String   @default("blocks") // "markdown" (original formatting kept) | "blocks" (plain block text: PDFs, plain pastes, older articles)
   lastReadAt  DateTime @default(now())
   createdAt   DateTime @default(now())
 

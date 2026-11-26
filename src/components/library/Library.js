@@ -17,6 +17,7 @@ import { Card, EmptyState, ErrorState, Skeleton, SavedCopyNote } from "@/compone
 import Alert from "@/components/ui/Alert.js";
 import { useToast } from "@/components/ui/Toast.js";
 import UploadForm from "./UploadForm.js";
+import { looksLikeMarkdown } from "@/lib/article-markdown.js";
 
 const MAX_TEXT = 200000;
 const DRAFT_KEY = "aha.draft";
@@ -52,6 +53,8 @@ function NewReading() {
   const titleRef = useRef(null);
   const draftTimer = useRef(null);
   const [clip, setClip] = useState(null);
+  // Pasted Markdown keeps its formatting unless the user says otherwise (design D2).
+  const [keepMarkdown, setKeepMarkdown] = useState(true);
 
   useEffect(() => {
     // Android share target (manifest share_target → /read?url=…&text=…).
@@ -142,7 +145,9 @@ function NewReading() {
       textRef.current?.focus();
       return;
     }
-    submit(title.trim() ? { text: trimmed, title: title.trim() } : { text: trimmed });
+    const body = title.trim() ? { text: trimmed, title: title.trim() } : { text: trimmed };
+    if (looksLikeMarkdown(trimmed)) body.markdown = keepMarkdown;
+    submit(body);
   };
 
   const onImport = (e) => {
@@ -229,6 +234,15 @@ function NewReading() {
             error={fieldError.text}
             counter={{ text: `${count.toLocaleString()} / ${MAX_TEXT.toLocaleString()}`, over: count > MAX_TEXT }}
           />
+          {looksLikeMarkdown(text) ? (
+            <label className="flex min-h-[44px] items-center gap-3 rounded-md border border-border bg-surface px-3 text-[15px]">
+              <input type="checkbox" className="h-5 w-5 flex-none accent-[var(--accent)]" checked={keepMarkdown} onChange={(e) => setKeepMarkdown(e.target.checked)} />
+              <span>
+                <span className="font-semibold">Keep Markdown formatting</span>
+                <span className="block text-[13px] text-muted">Looks like Markdown: headings, bold, links and tables will show as formatted.</span>
+              </span>
+            </label>
+          ) : null}
           {pastedLink ? (
             <Alert tone="info" compact action={{ label: "Import this link instead", onClick: () => importLinkInstead(pastedLink) }}>
               That looks like a link. We can fetch the article for you.

@@ -6,7 +6,7 @@
  * gets saved. Unsaved changes are guarded (leaving the page, Cancel, and a
  * session that expires mid-edit keeps a draft).
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, BEFORE_AUTH_REDIRECT } from "@/lib/client/api.js";
 import { MAX_ARTICLE_CHARS, MAX_TITLE_CHARS } from "@/lib/limits.js";
@@ -18,6 +18,9 @@ import Dialog from "@/components/ui/Dialog.js";
 import Alert from "@/components/ui/Alert.js";
 import { FullPageError, ErrorState, Skeleton } from "@/components/ui/Misc.js";
 import { useToast } from "@/components/ui/Toast.js";
+import { Segmented } from "@/components/ui/Tabs.js";
+import ArticleBody from "@/components/reader/ArticleBody.js";
+import { parseArticle } from "@/lib/client/article-blocks.js";
 
 const draftKey = (id) => `aha.editDraft.${id}`;
 
@@ -28,6 +31,10 @@ export default function ArticleEditor({ id }) {
   const [state, setState] = useState({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   const [title, setTitle] = useState("");
+  // Markdown keeps formatting (bold, links, tables…); plain text shows exactly as typed.
+  const [markdown, setMarkdown] = useState(false);
+  const [originalMarkdown, setOriginalMarkdown] = useState(false);
+  const [view, setView] = useState("write");
   const [text, setText] = useState("");
   const [original, setOriginal] = useState({ title: "", text: "" });
   const [restored, setRestored] = useState(false);
@@ -58,6 +65,8 @@ export default function ArticleEditor({ id }) {
           // storage blocked: no draft to restore
         }
         setOriginal(base);
+        setMarkdown(a.format === "markdown");
+        setOriginalMarkdown(a.format === "markdown");
         setTitle(draft?.title ?? base.title);
         setText(draft?.text ?? base.text);
         setRestored(Boolean(draft));
@@ -69,7 +78,8 @@ export default function ArticleEditor({ id }) {
     return () => controller.abort();
   }, [id, attempt]);
 
-  const dirty = state.status === "ready" && (title !== original.title || text !== original.text);
+  const dirty = state.status === "ready" && (title !== original.title || text !== original.text || markdown !== originalMarkdown);
+  const previewBlocks = useMemo(() => (view === "preview" ? parseArticle(text, markdown ? "markdown" : "blocks") : []), [view, text, markdown]);
 
   useEffect(() => {
     if (!dirty) return undefined;
@@ -114,7 +124,11 @@ export default function ArticleEditor({ id }) {
     }
     const body = {};
     if (title !== original.title) body.title = title.trim();
-    if (text !== original.text) body.text = text;
+    // Switching format sends the text with it (the server needs both).
+    if (text !== original.text || markdown !== originalMarkdown) {
+      body.text = text;
+      body.markdown = markdown;
+    }
     if (Object.keys(body).length === 0) {
       backToReader();
       return;
@@ -197,6 +211,31 @@ export default function ArticleEditor({ id }) {
             error={fieldError.title}
             helper="Leave empty to use the first line of the text."
           />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="flex min-h-[44px] items-center gap-2 text-[15px]">
+              <input type="checkbox" className="h-5 w-5 accent-[var(--accent)]" checked={markdown} onChange={(e) => setMarkdown(e.target.checked)} />
+              <span className="font-semibold">Markdown formatting</span>
+            </label>
+            <Segmented
+              size="sm"
+              ariaLabel="Editor view"
+              options={[
+                { value: "write", label: "Write" },
+                { value: "preview", label: "Preview" },
+              ]}
+              value={view}
+              onChange={setView}
+            />
+          </div>
+          {view === "preview" ? (
+            <div className="max-h-[70vh] overflow-y-auto rounded-md border border-border bg-bg p-4" aria-label="Preview">
+              {previewBlocks.length ? (
+                <ArticleBody blocks={previewBlocks} concepts={[]} fontSize={17} bodyRef={null} />
+              ) : (
+                <p className="text-muted">Nothing to preview yet.</p>
+              )}
+            </div>
+          ) : null}
           <TextArea
             ref={textRef}
             label="Text"
@@ -209,12 +248,18 @@ export default function ArticleEditor({ id }) {
             }}
             error={fieldError.text}
             counter={{ text: `${text.length.toLocaleString()} / ${MAX_ARTICLE_CHARS.toLocaleString()}`, over: text.length > MAX_ARTICLE_CHARS }}
-            className="[&_textarea]:font-reading [&_textarea]:leading-relaxed"
+            className={`[&_textarea]:font-reading [&_textarea]:leading-relaxed ${view === "preview" ? "hidden" : ""}`}
           />
           <details className="rounded-md border border-border bg-surface px-3 py-2 text-[14px]">
             <summary className="min-h-[36px] cursor-pointer font-semibold">Formatting tips</summary>
             <ul className="mt-1 mb-2 list-disc space-y-1 pl-5 text-muted">
               <li>Leave a blank line between paragraphs.</li>
+              {markdown ? (
+                <li>
+                  <code>**bold**</code>, <code>*italics*</code>, <code>[link text](https://…)</code>, <code>&gt; quote</code>, and tables with{" "}
+                  <code>| a | b |</code> rows.
+                </li>
+              ) : null}
               <li>
                 Start a line with <code>## </code> for a heading.
               </li>

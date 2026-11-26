@@ -285,3 +285,22 @@ export function markdownToArticle(source) {
 
   return { title: fm.title || heading1, text: serializeArticleBlocks(blocks) };
 }
+
+/**
+ * Keep an uploaded Markdown file as Markdown (design §1): drop front matter, HTML comments and
+ * embedded scripts/styles, cap the length at a line boundary, and find the title. Raw HTML that
+ * remains is harmless: the reader never renders it.
+ * @param {string} source
+ * @returns {{title: string, markdown: string}}
+ */
+export function prepareMarkdownSource(source) {
+  let src = String(source || "").replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  if (src.length > MAX_ARTICLE_CHARS) src = src.slice(0, src.lastIndexOf("\n", MAX_ARTICLE_CHARS) + 1 || MAX_ARTICLE_CHARS);
+  src = cutBetween(src, "<!--", "-->");
+  src = cutBetween(src, "<script", "</script>");
+  src = cutBetween(src, "<style", "</style>");
+  const lines = src.split("\n");
+  const fm = frontMatter(lines);
+  const markdown = lines.slice(fm.start).join("\n").replace(UNWANTED, "").trim();
+  return { title: markdownToArticle(src).title, markdown };
+}

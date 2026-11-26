@@ -147,7 +147,7 @@ function runWorker(bytes, kind, { workerFile, timeoutMs, deadlineMs, resourceLim
     if (signal?.aborted) onAbort();
 
     worker.on("message", (msg) => {
-      if (msg?.ok) return finish(null, { title: String(msg.title || ""), text: String(msg.text || "") });
+      if (msg?.ok) return finish(null, { title: String(msg.title || ""), text: String(msg.text || ""), format: msg.format === "markdown" ? "markdown" : "blocks" });
       const code = KNOWN_CODES.has(msg?.code) ? msg.code : "file_unreadable";
       finish(new DocumentImportError(code, (KNOWN_CODES.has(msg?.code) && msg.message) || CRASHED, String(msg?.detail || "worker_failed").slice(0, 200)));
     });
@@ -166,7 +166,7 @@ function runWorker(bytes, kind, { workerFile, timeoutMs, deadlineMs, resourceLim
  * @param {{signal?: AbortSignal, workerFile?: string, timeoutMs?: number, deadlineMs?: number,
  *   queueWaitMs?: number, maxConcurrent?: number, resourceLimits?: object, maxExternalBytes?: number}} [options]
  *   everything but `signal` exists for tests
- * @returns {Promise<{title: string, text: string}>}
+ * @returns {Promise<{title: string, text: string, format: "markdown"|"blocks"}>}
  * @throws {DocumentImportError} including `server_busy` (with retryAfter) when the queue is full
  */
 export async function parseInWorker(bytes, kind, options = {}) {

@@ -127,7 +127,7 @@ Each choice below was made on purpose. If you're tempted to change one, read its
 | D10 | **Session = signed token (JWT) in an httpOnly cookie** | No session table lookups for the signature; JavaScript can't steal the cookie | Revocation needs the `sessionVersion` check (see §7) |
 | D11 | **In-memory cache, rate limits and quotas** | No Redis to run or pay for; one server instance is enough today | Reset on every restart/deploy, and they'd be per-instance if you ever ran two |
 | D12 | **Hand-written service worker** (no PWA plugin) | Full control over what is cached; plugins didn't support this Next.js version well | More code to own (`public/sw.js`) |
-| D13 | **Articles stored as plain text "blocks"**, never HTML | Rendering stored HTML from the web is a cross-site-scripting risk. Plain text rendered by React can't run code | Formatting is limited to headings, lists, code blocks and paragraphs |
+| D13 | **Articles stored as Markdown or plain text "blocks"**, never HTML | Rendering stored HTML from the web is a cross-site-scripting risk. Markdown is tokenized (never turned into HTML) and rendered by React as text and a fixed set of elements, so it can't run code, while keeping the original formatting | Raw HTML, embeds and remote images inside articles are not shown; PDFs keep only headings, lists, code and paragraphs |
 | D14 | **Same error shape everywhere** `{error, message, retryAfter?, field?}` | The client can map any error to a clear message and a recovery action in one place | Every new error code needs a client message (see §8) |
 | D15 | **Every error shows a recovery action** | The user is never stuck on a dead end | More UI states to build and test |
 | D16 | **Logger dedupes by "fingerprint"** | One outage = one log row with a count, and one alert email, not thousands | Messages must be constant text; variable data goes in `detail` |
@@ -136,7 +136,7 @@ Each choice below was made on purpose. If you're tempted to change one, read its
 | D19 | **Secrets read lazily, fail closed** | `next build` works without secrets; a missing secret refuses sign-ins instead of falling back to a known value | A missing secret only shows up when someone tries to sign in (health check catches it) |
 | D20 | **Next.js `next start`, not "standalone" build** | Simplest deployment on Railway | Slightly larger deploy |
 | D23 | **The start script applies database migrations** (`prisma migrate deploy && next start`, as in SafeHarbor) | Tables always match the code, even if the host skips a pre-deploy step (Railway's `railway.json` is deprecated and was being ignored, leaving production with no tables) | Each start takes a moment longer; a failed migration stops the app from starting, which is safer than running against the wrong schema |
-| D21 | **Uploads are converted to text on the server; the file itself is not kept** | Same safe plain-text reading view for every source; nothing to store or scan later | The original layout (columns, images, tables) is lost; to re-read the original, the user keeps their own copy |
+| D21 | **Uploads are converted to Markdown or text on the server; the file itself is not kept** | Same safe reading view for every source; nothing to store or scan later | Formatting, lists and tables survive for Word and Markdown; page layout and images don't, and PDFs become plain text. To re-read the original, the user keeps their own copy |
 | D22 | **Upload sends the raw file, not a multipart form** | A file type like `application/pdf` can't be sent cross-site without a browser preflight, so other sites can't forge uploads; and the server can stop reading at the size cap | The client sets the type and the `X-File-Name` header itself |
 
 ---
@@ -163,15 +163,20 @@ Each feature lists what the user sees, how it works, and its files. "UI" means `
 
 - Lists recent articles with a title, the site's domain, an excerpt and how many concepts were saved from each.
 - **Paste tab**: paste text with an optional title. Blank lines separate paragraphs, and ` ``` ` fences keep code
-  blocks. The draft is saved on the device (`aha.draft`) so a reload or a forced sign-in doesn't lose it.
-- **Import tab**: paste a link. The server fetches it safely (see §9) and extracts the readable text: it keeps
-  headings, lists and code, and drops menus, scripts and footers.
-- **Upload file tab**: choose (or, on desktop, drag in) a **PDF**, **Word .docx** or **Markdown .md** file up to **10 MB**. The server
-  turns it into the same block text as everything else and the article opens in the reader. The Library and reader
+  blocks. When the text looks like Markdown (a heading, a table, a code fence, or two signals such as `**bold**`
+  and a list; `looksLikeMarkdown` in `lib/article-markdown.js`), a **Keep Markdown formatting** checkbox appears,
+  ticked. Ticked, the article is stored as Markdown and read with its formatting; unticked, it stays exactly as typed. The draft is saved on the device (`aha.draft`) so a reload or a forced sign-in doesn't lose it.
+- **Import tab**: paste a link. The server fetches it safely (see §9) and extracts the readable part as Markdown
+  (`extractReadableMarkdown` in `lib/extract.js` → `lib/html-to-markdown.js`): it keeps headings, **bold**, *italics*,
+  links (relative ones resolved against the page, only http(s)/mailto kept), nested lists, quotes, code with its
+  language, and tables, and drops menus, scripts, forms and footers. A `text/plain` page stays plain block text.
+- **Upload file tab**: choose (or, on desktop, drag in) a **PDF**, **Word .docx** or **Markdown .md** file up to **10 MB**. Markdown and
+  Word files keep their formatting (stored as Markdown); a PDF becomes plain block text. The article opens in the reader. The Library and reader
   show the file name where a link would show its website. Details in §4.2.1.
 - **Edit** an article (pencil on its Library card, or **Edit** under the title in the reader → `/read/[id]/edit`):
-  rename it, change its text (shown in the block format: blank line = paragraph, `## ` heading, `- ` bullet,
-  ``` code), or delete it. Unsaved changes are guarded; a session that expires mid-edit keeps a draft. Saved
+  rename it, change its text, or delete it. A **Markdown formatting** checkbox switches the stored format, and a
+  **Write / Preview** switch shows the text as the reader will (tips list the Markdown that works). Plain-format text
+  uses the block format: blank line = paragraph, `## ` heading, `- ` bullet, ``` code. Unsaved changes are guarded; a session that expires mid-edit keeps a draft. Saved
   concepts stay linked; the original web page or file isn't touched. A blank title is rebuilt from the text.
 - Delete an article (Library card or the editor) after a confirmation.
 - UI: `library/Library.js`, `library/UploadForm.js`, `library/ArticleEditor.js`. API: `GET/POST /api/articles`, `POST /api/articles/upload`,
@@ -206,10 +211,12 @@ Each feature lists what the user sees, how it works, and its files. "UI" means `
    The browser always sends Markdown as `text/markdown`. `text/plain` stays refused, because another website's form
    can send that type without the browser's preflight check.
 
-4. **Markdown files** (`lib/markdown.js`) are converted in-process, not in the worker: the conversion is a single
-   pass whose regexes all stop at the next delimiter (no rescanning) and never put two patterns that match the same
-   characters side by side (like "spaces, then anything"), which would slow to minutes on one long line of spaces, and only the first 400,000 characters are read,
-   so even a hostile file takes milliseconds. Readers get text, never syntax:
+4. **Markdown files** are handled in-process, not in the worker, and **stored as Markdown** (`Article.format =
+   "markdown"`), so the reader shows the original formatting (see "Reading format" below).
+   `prepareMarkdownSource` in `lib/markdown.js` only reads the first 400,000 characters, removes the byte-order
+   mark, front matter, comments, `<script>` and `<style>`, and finds the title. The older converter in the same file
+   (`markdownToArticle`, below) is still used for the title and kept for reference; its regexes all stop at the next
+   delimiter, so even a hostile file takes milliseconds. What it turned Markdown into before the format change:
 
    | Markdown | Becomes |
    |---|---|
@@ -225,9 +232,21 @@ Each feature lists what the user sees, how it works, and its files. "UI" means `
    | Footnotes `[^1]` | References removed; definitions become "Note 1: …" |
 
    Title: front matter `title:`, else the first `#` heading (then not repeated in the text), else the file name.
+
+   **Reading format.** Articles have a `format`: `"markdown"` (pasted Markdown with the box ticked, `.md` and `.docx`
+   uploads, web pages) or `"blocks"` (PDFs, plain pastes, articles from before the change). Markdown is read by
+   `lib/article-markdown.js`, which uses only the tokenizer of the `marked` package (its HTML output is never used):
+   each paragraph, heading, list item, quote, code block or **table row** becomes one selectable unit whose `text`
+   is exactly what the page shows, with formatting *spans* (bold, italics, strike, code, link, image, line break)
+   over it. `ArticleBody.js` renders spans as React elements, so stored text can never become HTML. Raw HTML in
+   Markdown is dropped, links keep only http(s)/mailto targets (opened in a new tab, `noopener`), and images show as
+   an "Image: description" chip linking to the picture (remote images are never loaded). Because `text` equals the
+   rendered text, selections, explanations, saved-concept marks, bookmarks and reading progress all work across
+   bold words and links; table cells are joined by a hidden " · " so a row reads as one line.
    A file that isn't UTF-8 gets "save it as UTF-8"; one with almost no text gets "no text to read".
 
-5. **Word files**: before anything is decompressed, the zip's table of contents is read to check the total
+5. **Word files** are turned into HTML by `mammoth` (in the worker), then into Markdown by the same converter as
+   web pages, so headings, bold, italics, links, lists and tables survive. Before anything is decompressed, the zip's table of contents is read to check the total
    unpacked size (max 40 MB), the size of `word/document.xml` (max 6 MB; a 300-page document is 2-4 MB) and the
    file count (max 5,000). This fails obvious *zip bombs* (tiny files that unpack to gigabytes) at once. A zip whose
    table of contents lies about sizes fails when unpacking (JSZip checks the real size).
@@ -279,8 +298,8 @@ Each feature lists what the user sees, how it works, and its files. "UI" means `
 
 ### 4.3 Reader and the explain loop (`/read/:id`)
 
-- The article renders from its stored blocks (headings, lists, code that scrolls sideways, paragraphs). UI:
-  `reader/ArticleBody.js`.
+- The article renders from its stored format (§4.2.1 "Reading format"): headings, paragraphs, bold, italics, links,
+  nested lists, quotes, tables (scroll sideways on phones) and code that scrolls sideways. UI: `reader/ArticleBody.js`.
 - **Selecting text**: on desktop a floating **I don't understand** pill appears; on touch screens an action bar
   appears at the bottom. A "tap a sentence" mode selects a whole sentence with one tap, which is handy on phones.
   Selections over 1,000 characters are refused with a hint to choose less. UI: `reader/SelectionUI.js`,
@@ -457,7 +476,7 @@ concepts but unlinks them.
 |---|---|---|
 | **User** | An account | `email` (unique), `locale` ("en"/"zh"), `helpLevel` (1–3), `onboardedAt` (null until onboarding is done), `sessionVersion` (bumped by "sign out of all devices") |
 | **MagicToken** | One sign-in email | `tokenHash` (an HMAC of the link token; the token itself is never stored), `codeHash` (HMAC of the 6-digit code), `attempts` (wrong codes, locks at 5), `next` (where to go after sign-in), `consumed`, `expiresAt` (15 minutes) |
-| **Article** | Something the user is reading | `content` (block text, capped at 200,000 chars), `url`/`domain` (only for link imports), `fileName` (only for uploads), `readBlock` / `readPercent` (reading progress), `lastReadAt` |
+| **Article** | Something the user is reading | `content` (Markdown or block text, capped at 200,000 chars), `format` (`"markdown"` or `"blocks"`, default `"blocks"`), `url`/`domain` (only for link imports), `fileName` (only for uploads), `readBlock` / `readPercent` (reading progress), `lastReadAt` |
 | **Explanation** | One AI explanation shown to the user | `highlightedText`, `surroundingText`, `helpLevel`, `language`, `explanation`, `translationZh`, `aiProvider`, `aiModel`, `aiTokensUsed`, `aiLatencyMs`, `cacheHit`, `followUp` (null for levels 1–3; `deeper` / `big_picture` / `related` for a "Keep exploring" answer, stored with `helpLevel` 3), `basedOnId` (the explanation a follow-up continues; a plain id, not a foreign key, see below) |
 | **Concept** | A Notebook entry | `term`, `definition`, `definitionZh`, `userNotes`, `tags[]`, plus scheduling fields `nextReviewAt`, `interval`, `easeFactor`, `repetitions`, `reviewCount`, `lastReviewedAt` |
 | **Bookmark** | A marked passage in an article | `articleId`, `blockIndex`, `quote` (≤300 chars, used to find the spot again after edits), `kind` (`revisit` / `important`), `note` |
@@ -840,7 +859,7 @@ never shows a raw crash.
 | Seeing other users' data | Every query filters by `userId` in the same query; others' ids answer 404 | All routes |
 | Prompt injection ("ignore previous instructions") | Rules first in the system message; untrusted text fenced in the user message; invisible characters stripped; output validated | `ai/safety.js`, `ai/*-prompt.js` |
 | Server fetching internal addresses via article import (SSRF) | See below | `url-guard.js` |
-| Malicious HTML in imported articles | Never stored or rendered as HTML; plain text blocks only | `extract.js`, `article-blocks.js`, `ArticleBody.js` |
+| Malicious HTML in imported articles | Never stored or rendered as HTML: pages become escaped Markdown, Markdown is tokenized only (raw HTML dropped, http(s)/mailto links only), React renders text | `extract.js`, `html-to-markdown.js`, `article-markdown.js`, `ArticleBody.js` |
 | Malicious or huge uploaded files | 10 MB cap enforced while reading; stalled bodies cut off; type from the file's bytes; zip size checks before unpacking; parsing in a worker with heap, external-memory and time limits and a per-process cap on parses (§4.2.1); PDF script evaluation and font loading off; output is plain text; the file isn't stored | `api/articles/upload/route.js`, `upload-body.js`, `document-import.js`, `document-sandbox.js` |
 | Forged uploads from other websites | Raw-file body with a file content type (needs a browser preflight cross-site); text/form types refused; plus SameSite cookie and the cross-site check | `api/articles/upload/route.js`, `http.js` |
 | Secrets in logs | Everything logged passes through `redact()` (masks keys, tokens, emails) | `redact.js` |
@@ -1018,8 +1037,11 @@ Page files are tiny: each just renders a component from `src/components/`.
 | `cache.js` | AI answer cache |
 | `articles.js` | Create/list articles (paste or import) |
 | `url-guard.js` | Safe fetching of imported links (§9) |
-| `extract.js` | HTML → readable block text |
-| `markdown.js` | Markdown → readable block text (structure kept, syntax removed) |
+| `extract.js` | HTML → readable Markdown (`extractReadableMarkdown`) or block text (`extractReadable`) |
+| `html-to-markdown.js` | Small lenient HTML parser + Markdown writer (escapes text, resolves links, nesting capped) |
+| `article-markdown.js` | Markdown → reader units with formatting spans; `looksLikeMarkdown`, `safeHref` (client-safe) |
+| `entities.js` | HTML entity decoding shared by the parsers |
+| `markdown.js` | Prepares uploaded Markdown (front matter, title, size cap); older Markdown → block text converter |
 | `document-import.js` | Uploaded PDF/.docx/.md → readable block text: type detection, zip size checks, then the worker, then title and text checks |
 | `document-sandbox.js` | Runs a parse in a resource-limited worker thread; global concurrency gate (§4.2.1) |
 | `document-worker.mjs` | The worker entry (plain Node, not bundled: relative imports only) |
@@ -1140,6 +1162,7 @@ Some conventions:
   |---|---|---|
   | Keep exploring | `tests/api-explain.test.js` ("Keep exploring"), `tests/ai-followup-prompt.test.js`, `tests/admin.test.js` (metrics), `tests/explanation-text.test.js` (numbered lists) | `e2e/keep-exploring.spec.mjs` |
   | Markdown uploads | `tests/markdown.test.js` (conversion, hostile input stays fast), `tests/document-import.test.js`, `tests/api-upload.test.js` | `e2e/upload.spec.mjs` |
+  | Reading format (Markdown) | `tests/article-markdown.test.js`, `tests/html-to-markdown.test.js`, `tests/api-articles.test.js` (web import) | `e2e/markdown-reading.spec.mjs` |
   | Health privacy | `tests/health.test.js` (anonymous production callers get only `{status, timestamp}`) | – |
 
 - **Document fixtures**: `tests/fixtures/documents.js` builds real PDF and .docx files in code (`makePdf`, `makeDocx`,

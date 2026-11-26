@@ -222,7 +222,7 @@ export default function Reader({ id }) {
     return () => document.documentElement.style.removeProperty("--toast-offset");
   }, []);
 
-  const blocks = useMemo(() => (article.status === "ready" ? parseArticle(article.data?.content) : []), [article]);
+  const blocks = useMemo(() => (article.status === "ready" ? parseArticle(article.data?.content, article.data?.format) : []), [article]);
   const paragraphs = useMemo(() => blocks.map((b) => b.text), [blocks]);
   const placedBookmarks = useMemo(() => bookmarks.map((b) => ({ ...b, at: resolveBlock(b, paragraphs) })), [bookmarks, paragraphs]);
   const bookmarkKinds = useMemo(() => {

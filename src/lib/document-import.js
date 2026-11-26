@@ -17,7 +17,8 @@ import { serializeArticleBlocks, parseArticleBlocks } from "./article-blocks.js"
 import { MAX_ARTICLE_CHARS, MAX_TITLE_CHARS, MARKDOWN_TYPES } from "./limits.js";
 import { DocumentImportError, UNWANTED_CHARS } from "./document-shared.js";
 import { parseInWorker } from "./document-sandbox.js";
-import { markdownToArticle } from "./markdown.js";
+import { prepareMarkdownSource } from "./markdown.js";
+import { markdownPlainText, markdownUnits } from "./article-markdown.js";
 
 export { DocumentImportError };
 
@@ -175,7 +176,7 @@ export function inspectZip(bytes) {
  * @param {{fileName?: string, signal?: AbortSignal, sandbox?: object}} [options]
  *   `signal` stops the parse when the client goes away; `sandbox` is passed to
  *   parseInWorker (tests only)
- * @returns {Promise<{title: string, text: string, kind: "pdf"|"docx"|"markdown"}>}
+ * @returns {Promise<{title: string, text: string, kind: "pdf"|"docx"|"markdown", format: "markdown"|"blocks"}>}
  * @throws {DocumentImportError}
  */
 export async function extractDocument(bytes, { fileName = "", contentType = "", signal, sandbox = {} } = {}) {
@@ -193,8 +194,12 @@ export async function extractDocument(bytes, { fileName = "", contentType = "", 
     throw new DocumentImportError("file_unsupported", `That file isn't a Word document. ${NOT_SUPPORTED}`, "zip_not_docx");
   }
 
-  const extracted = kind === "markdown" ? markdownToArticle(decodeMarkdown(bytes)) : await parseInWorker(bytes, kind, { signal, ...sandbox });
-  if (extracted.text.replace(/\s/g, "").length < MIN_TEXT_CHARS) {
+  // Markdown and Word keep their original formatting (stored as Markdown); PDFs become block text.
+  const extracted = kind === "markdown"
+    ? (({ title, markdown }) => ({ title, text: markdown, format: "markdown" }))(prepareMarkdownSource(decodeMarkdown(bytes)))
+    : (({ format, ...rest }) => ({ ...rest, format: format === "markdown" ? "markdown" : "blocks" }))(await parseInWorker(bytes, kind, { signal, ...sandbox }));
+  const readable = extracted.format === "markdown" ? markdownPlainText(extracted.text) : extracted.text;
+  if (readable.replace(/\s/g, "").length < MIN_TEXT_CHARS) {
     throw new DocumentImportError(
       "file_unreadable",
       kind === "pdf"
@@ -208,7 +213,15 @@ export async function extractDocument(bytes, { fileName = "", contentType = "", 
   const title = (extracted.title || titleFromFileName(fileName)).slice(0, MAX_TITLE_CHARS);
   // The reader shows the title above the text, so an opening heading that is the title would repeat.
   let text = extracted.text;
-  const blocks = parseArticleBlocks(text);
-  if (blocks[0]?.type === "heading" && blocks[0].text === title && blocks.length > 1) text = serializeArticleBlocks(blocks.slice(1));
-  return { kind: kind === "zip" ? "docx" : kind, title, text: text.slice(0, MAX_ARTICLE_CHARS) };
+  if (extracted.format === "markdown") {
+    const units = markdownUnits(text);
+    // Drop the opening "# Title" line (ATX or underlined) when it is the title.
+    if (units[0]?.type === "h" && units[0].text === title && units.length > 1) {
+      text = text.replace(/^\s*#{1,6}[ \t]+[^\n]*\n?|^\s*[^\n]+\n[ \t]*(=+|-+)[ \t]*\n?/, "").trimStart();
+    }
+  } else {
+    const blocks = parseArticleBlocks(text);
+    if (blocks[0]?.type === "heading" && blocks[0].text === title && blocks.length > 1) text = serializeArticleBlocks(blocks.slice(1));
+  }
+  return { kind: kind === "zip" ? "docx" : kind, title, text: text.slice(0, MAX_ARTICLE_CHARS), format: extracted.format };
 }

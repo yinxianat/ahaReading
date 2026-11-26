@@ -53,7 +53,9 @@ export const POST = withErrorHandling(async (request) => {
   if (parsedText.error) return parsedText.error;
   const parsedTitle = parseArticleTitle(title);
   if (parsedTitle.error) return parsedTitle.error;
+  const { markdown } = body.data;
+  if (markdown !== undefined && typeof markdown !== "boolean") return badRequest("markdown must be true or false.", "markdown");
 
-  const article = await createPastedArticle(userId, { text: parsedText.text, title: parsedTitle.title });
+  const article = await createPastedArticle(userId, { text: parsedText.text, title: parsedTitle.title, markdown });
   return Response.json({ article: serializeArticle(article) }, { status: 201 });
 }, { source: "api" });

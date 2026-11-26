@@ -5,36 +5,10 @@
  * <pre> code verbatim, written in the plain-text block format of article-blocks.js.
  */
 import { serializeArticleBlocks, parseArticleBlocks } from "./article-blocks.js";
+import { decodeEntities } from "./entities.js";
+import { htmlToMarkdown } from "./html-to-markdown.js";
 
-const NAMED_ENTITIES = {
-  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", ensp: " ", emsp: " ", thinsp: " ",
-  mdash: "—", ndash: "–", hellip: "…", lsquo: "‘", rsquo: "’", sbquo: "‚", ldquo: "“", rdquo: "”", bdquo: "„",
-  laquo: "«", raquo: "»", lsaquo: "‹", rsaquo: "›", middot: "·", bull: "•", deg: "°", times: "×", divide: "÷",
-  copy: "©", reg: "®", trade: "™", sect: "§", para: "¶", dagger: "†", Dagger: "‡", prime: "′", Prime: "″",
-  euro: "€", pound: "£", yen: "¥", cent: "¢", plusmn: "±", frac12: "½", frac14: "¼", frac34: "¾",
-  larr: "←", rarr: "→", uarr: "↑", darr: "↓", harr: "↔", le: "≤", ge: "≥", ne: "≠", asymp: "≈", minus: "−",
-  iexcl: "¡", iquest: "¿", shy: "", zwj: "", zwnj: "",
-  aacute: "á", eacute: "é", iacute: "í", oacute: "ó", uacute: "ú", Aacute: "Á", Eacute: "É",
-  agrave: "à", egrave: "è", ograve: "ò", acirc: "â", ecirc: "ê", ocirc: "ô", auml: "ä", euml: "ë",
-  ouml: "ö", uuml: "ü", Auml: "Ä", Ouml: "Ö", Uuml: "Ü", szlig: "ß", ccedil: "ç", ntilde: "ñ", oslash: "ø", aring: "å",
-};
-
-/**
- * Decode HTML entities (named subset + all numeric forms).
- * @param {string} text
- * @returns {string}
- */
-export function decodeEntities(text) {
-  return String(text).replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi, (match, body) => {
-    if (body[0] === "#") {
-      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
-      // Reject surrogates, out-of-range and NUL — they'd produce invalid strings.
-      if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return "�";
-      return String.fromCodePoint(code);
-    }
-    return Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, body) ? NAMED_ENTITIES[body] : match;
-  });
-}
+export { decodeEntities };
 
 const DROP_WITH_CONTENT = ["script", "style", "noscript", "template", "svg", "math", "iframe", "object", "canvas", "nav", "header", "footer", "aside", "form", "button", "select", "textarea", "figure", "menu", "dialog"];
 const BLOCK_TAGS = "p|div|section|article|main|h[1-6]|li|ul|ol|dl|dt|dd|blockquote|pre|tr|table|br|hr|figcaption|caption";
@@ -179,13 +153,8 @@ function toBlock(paragraph, stash) {
   return block && (block.type !== "code" || block.text) ? block : null;
 }
 
-/**
- * Extract a title and readable blocks from an HTML document.
- * @param {string} html
- * @returns {{title: string, paragraphs: string[], blocks: Array<object>, text: string}}
- *   `text` is the stored content format; `paragraphs` is each block serialised.
- */
-export function extractReadable(html) {
+/** Title and main-content HTML of a page, with chrome (scripts, navigation, forms…) removed. */
+function readableBody(html, drop) {
   let doc = String(html || "");
   doc = doc.replace(/<!--[\s\S]*?-->/g, " ").replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, " ").replace(/\uE000/g, "");
   doc = neutralizeAttributeBrackets(doc);
@@ -195,7 +164,7 @@ export function extractReadable(html) {
 
   let body = (/<body\b[^>]*>([\s\S]*)<\/body>/i.exec(doc) || [])[1] || doc;
   body = body.replace(/<head\b[\s\S]*?<\/head>/gi, " ");
-  for (const tag of DROP_WITH_CONTENT) {
+  for (const tag of drop) {
     body = body.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
     body = body.replace(new RegExp(`<${tag}\\b[^>]*\\/?>`, "gi"), " ");
   }
@@ -203,7 +172,17 @@ export function extractReadable(html) {
   // Prefer the main content container when the page marks one.
   const main = /<article\b[^>]*>([\s\S]*?)<\/article>/i.exec(body) || /<main\b[^>]*>([\s\S]*?)<\/main>/i.exec(body);
   if (main && stripTags(main[1]).trim().length > 200) body = main[1];
+  return { title: title.slice(0, 200), body };
+}
 
+/**
+ * Extract a title and readable blocks from an HTML document.
+ * @param {string} html
+ * @returns {{title: string, paragraphs: string[], blocks: Array<object>, text: string}}
+ *   `text` is the stored content format; `paragraphs` is each block serialised.
+ */
+export function extractReadable(html) {
+  const { title, body } = readableBody(html, DROP_WITH_CONTENT);
   const stash = [];
   const marked = cutBlocks(body, stash).replace(new RegExp(`<\\/?(?:${BLOCK_TAGS})\\b[^>]*>`, "gi"), "\n\n");
   const blocks = stripTags(marked)
@@ -213,7 +192,22 @@ export function extractReadable(html) {
     .filter(Boolean);
 
   const paragraphs = blocks.map((b) => serializeArticleBlocks([b]));
-  return { title: title.slice(0, 200), paragraphs, blocks, text: serializeArticleBlocks(blocks) };
+  return { title, paragraphs, blocks, text: serializeArticleBlocks(blocks) };
+}
+
+// Figures often hold code samples and diagrams' captions, which Markdown keeps.
+const DROP_FOR_MARKDOWN = DROP_WITH_CONTENT.filter((t) => t !== "figure");
+
+/**
+ * Extract a title and the readable content as Markdown, keeping the page's formatting
+ * (bold, italics, links, lists, quotes, code, tables). Used for web pages and Word files.
+ * @param {string} html
+ * @param {{baseUrl?: string}} [options] the page address, to resolve relative links
+ * @returns {{title: string, markdown: string}}
+ */
+export function extractReadableMarkdown(html, { baseUrl } = {}) {
+  const { title, body } = readableBody(html, DROP_FOR_MARKDOWN);
+  return { title, markdown: stripControls(htmlToMarkdown(body, { baseUrl })) };
 }
 
 /**

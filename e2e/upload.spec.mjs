@@ -33,7 +33,7 @@ test.describe("upload a document", () => {
     await expect(page.locator("main li", { hasText: "Raft in one page" })).toContainText("raft-notes.pdf");
   });
 
-  test("a Markdown file reads as clean text: structure kept, syntax gone", async ({ page, user }) => {
+  test("a Markdown file keeps its original formatting: bold, links, tables; no raw syntax", async ({ page, user }) => {
     const input = await openUploadTab(page);
     const md = [
       "---", "title: Raft study notes", "---", "",
@@ -49,7 +49,11 @@ test.describe("upload a document", () => {
     await expect(page.getByRole("heading", { name: "Raft study notes", level: 1 })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Roles" })).toBeVisible();
     await expect(page.locator("ul li", { hasText: "Leader: handles writes" })).toBeVisible();
-    await expect(page.locator("ul li", { hasText: "Term: quorum · Meaning: a majority" })).toBeVisible();
+    // Formatting is kept as real formatting: a table, bold text and a link.
+    await expect(page.locator("article table td", { hasText: "a majority" })).toBeVisible();
+    await expect(page.locator("article table th", { hasText: "Meaning" })).toBeVisible();
+    await expect(page.locator("article strong", { hasText: "heartbeats" })).toBeVisible();
+    await expect(page.locator("article a", { hasText: "the paper" })).toHaveAttribute("href", "https://raft.github.io/");
     await expect(page.locator("pre[data-p]")).toHaveText("const term = 1;");
     const article = await page.locator("article").innerText();
     expect(article).toContain("Leaders use heartbeats — see the paper.");

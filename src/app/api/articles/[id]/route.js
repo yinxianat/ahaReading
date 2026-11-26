@@ -21,7 +21,11 @@ export const GET = withErrorHandling(async (request, context) => {
   return Response.json({ article: serializeArticle(article) }, { headers: { "Cache-Control": "no-store" } });
 }, { source: "api" });
 
-/** PATCH {title?, text?} → {article}. A blank title is rebuilt from the text; send at least one field. */
+/**
+ * PATCH {title?, text?, markdown?} → {article}. A blank title is rebuilt from the text; send at least
+ * one of title/text. `markdown` (with text) stores it as Markdown (true) or plain text (false);
+ * without it the article keeps its format.
+ */
 export const PATCH = withErrorHandling(async (request, context) => {
   const auth = await requireUser(request);
   if (auth.response) return auth.response;
@@ -45,6 +49,11 @@ export const PATCH = withErrorHandling(async (request, context) => {
     const parsed = parseArticleTitle(body.data.title);
     if (parsed.error) return parsed.error;
     changes.title = parsed.title;
+  }
+  if ("markdown" in body.data) {
+    if (typeof body.data.markdown !== "boolean") return badRequest("markdown must be true or false.", "markdown");
+    if (!("text" in changes)) return badRequest("Send the text together with markdown.", "markdown");
+    changes.markdown = body.data.markdown;
   }
   if (Object.keys(changes).length === 0) return badRequest("Nothing to update. Send a title or the text.");
 

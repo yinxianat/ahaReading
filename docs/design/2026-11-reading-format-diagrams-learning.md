@@ -304,6 +304,109 @@ live AI tests); and an end-to-end flow where a rejected topic shows its message 
 
 ---
 
+## 3A. Aha Listening (audio learning), proposed 2026-11-26
+
+### The idea
+Everything you can read in AhaReading, you can also **listen to**: walking, driving, cooking, eyes closed. Audio is
+**written for the ear**, not text read aloud. You choose the level, the style and how long each part is. Every part
+is saved, so you can go back to any earlier session and pick up where you left off.
+
+### What the user sees
+1. **Listen** is on every article, selection, Aha Learning topic and set of Notebook concepts. It opens a short
+   setup:
+   - **Level:** Foundations, Working knowledge or Advanced.
+   - **Style** (pick one; each part can use a different style):
+
+     | Style | What it sounds like |
+     |---|---|
+     | **Build it from the ground up** | Starts from first principles; each idea rests on the last |
+     | **Quick summary** | The main points in plain words, with a recap at the end |
+     | **Key concepts** | One concept per chapter: what it is, why it matters, one example |
+     | **Stories and fun facts** | History, people, surprising facts and real failures that make it stick |
+     | **Real-world case** | A worked scenario ("a retailer's nightly load fails…") |
+     | **Two voices** | A host asks, an expert explains; questions are a listener's natural ones |
+     | **Common mistakes** | Misconceptions and why they're wrong |
+     | **Quiz by ear** | A question, "pause and think", then the answer and why |
+
+   - **Part length:** 2, 5, 10 or 15 minutes, or a custom length. Longer material is split into parts of that length.
+   - **Voice and speed:** speed 0.75×–2×, changeable any time.
+2. **Player** (works without looking):
+   - **Controls:** play/pause, back 15 s, forward 30 s, previous/next chapter, previous/next part.
+   - **Lock screen and headphones:** lock-screen and headphone-button controls (Media Session API).
+   - **Continuous listening:** the next part plays automatically, and there's a sleep timer.
+   - **Spoken cues:** "Part 2 of 4: Partitioning, about 5 minutes" at the start; a 20-second recap at the end.
+3. **Library → Listening:** every series and part, with progress ("Part 3 of 6, 2:10 left"). Tap to resume exactly
+   where you stopped. History is kept, so earlier sessions are always one tap away.
+4. **Transcript:** each part has a synced transcript (for review, accessibility and search). It's optional, never
+   required.
+
+### Writing for the ear (the generation rules)
+- **Plain spoken language:** short sentences, signposting ("There are three ideas here. First…"), and key terms
+  repeated, not referred back to.
+- **Nothing visual, ever:**
+  - code is described ("a query that groups sales by month"), never read symbol by symbol;
+  - tables become comparisons ("Postgres is row-based, while a warehouse like…");
+  - numbers and abbreviations are spoken naturally;
+  - no "see below" or "in the table".
+- **Recaps and quizzes:** every part ends with a short recap. Quiz parts leave a 3–5 second pause before the answer.
+- **Grounding:** the source text (article, selection, topic) is fenced as untrusted data. The script must stay within
+  its material and the chosen style.
+- **Length:** about 150 spoken words per minute, so a 5-minute part is about 750 words. The server checks length
+  before making audio.
+
+### How it works
+- **Two steps:**
+  1. The AI writes the script, in structured chapters, and the server checks it.
+  2. A text-to-speech step turns it into audio.
+
+  Parts are generated one at a time, when first played or prefetched one part ahead, so nothing is paid for until
+  it's used.
+- **Audio storage:** audio files go in **object storage** (see §5.1: not in Postgres). They're served through
+  short-lived signed links and are cacheable for offline listening. Postgres stores only metadata.
+- **Text-to-speech options (decision A1):**
+  - **(a)** the browser's built-in speech: free and instant, but the voice varies by device, there's no file, and on
+    iPhone it stops when the screen locks;
+  - **(b)** a server speech service (for example OpenAI or Google Cloud TTS): natural voices, a real audio file,
+    lock-screen playback, offline caching. Cost is roughly 1–2 cents per minute.
+  - **Decision:** start with **(a)**, the browser's default voice. Speech goes through a provider interface
+    (`speak`, `pause`, `resume`, `stop`, progress events), so a server service can be added later as another provider.
+- **Data:**
+  - `AudioSeries`: `id, userId, source (articleId | selection quote | planTopicId | conceptIds), level, style, partMinutes, voice, createdAt`.
+  - `AudioPart`: `id, seriesId, order, title, scriptMd, chapters JSON [{title, startSec}], audioKey, durationSec, status`.
+  - `ListeningProgress`: `userId, partId, positionSec, speed, completedAt`.
+- **Limits:** a daily cap on generated audio minutes (for example 60), and parts at most 15 minutes. Speech is
+  generated only from a script that passed the checks.
+
+### More ideas in the same spirit
+- **Daily audio review:** your due Notebook concepts as a 5-minute "listen and recall" episode (question, pause,
+  answer).
+- **Article as a podcast:** a one-tap "Two voices" episode for any saved article.
+- **Explain it back:** after listening, say or type the idea in your own words, and the AI tells you what you got
+  right and what you missed (the Feynman technique).
+
+## 3B. The bigger goal: many ways into the same idea
+
+**Goal:** *AhaReading meets the learner where they are: any **mode**, any **depth**, any **angle**, any **amount of
+time**, and turns what they read into what they know.* The same piece of knowledge should be reachable in whichever
+form suits the moment, and each form should strengthen the others.
+
+| Dimension | Options (✅ built, 🔜 designed, 💡 idea) |
+|---|---|
+| **Mode** | Read ✅ · See (diagrams 🔜, concept maps 💡, timelines 💡) · Listen 🔜 · Do (exercises, SQL sandbox 🔜) · Talk (explain it back 💡, Socratic chat on the article 💡) |
+| **Depth** | Simple / Analogy / Deep dive ✅ · Go deeper ✅ · Foundations → Advanced learning paths 🔜 |
+| **Angle** | Bigger picture ✅ · Related topics ✅ · Ground-up, summary, stories, case study, common mistakes 🔜 · History and people 💡 · Contrarian view ("when this is the wrong choice") 💡 |
+| **Time** | 2-minute micro-lessons 💡 · 5–15 minute audio parts 🔜 · Deep sessions ✅ · Commute mode (audio queue) 💡 |
+| **Memory** | Spaced review ✅ · Missed exercises into review 🔜 · Audio review 💡 · Cross-mode review (see it, then hear it, then do it) 💡 |
+| **Personal** | Learner profile (role, goal, what you already know) shaping examples 💡 · Adaptive difficulty from exercise results 🔜 · Knowledge map of strengths and gaps 💡 |
+| **Connections** | "You met this in article X" cross-links 💡 · Prerequisite check before reading ("you'll need joins and grain") 💡 · Auto-built glossary per article 💡 |
+| **Reflection** | Weekly recap ("your week in learning", as text or audio) 💡 · Streaks ✅ · Explain-it-back score over time 💡 |
+
+**Suggested next ideas after the current plan (highest value first):**
+1. **Explain it back.** It turns passive reading into active recall and reuses the existing AI safety pipeline.
+2. **Prerequisite check.** Before a hard article, list the 3–5 concepts it assumes, with one-tap explanations.
+3. **Learner profile.** Every explanation, diagram, lesson and audio part uses examples from your field.
+4. **Concept map.** A diagram of how your Notebook concepts connect across articles; it reuses the diagram renderer.
+
 ## 4. Build order and effort
 
 | Phase | What | Rough effort | Depends on |
@@ -312,6 +415,7 @@ live AI tests); and an end-to-end flow where a rejected topic shows its message 
 | 2 | Diagrams (prompt + validation, layout + zoom, retries, saving) | 2 sessions | 1 (selection over formatted text) |
 | 3a | Aha Learning core: topic suggestions, plans, lessons, multiple choice, find the error, short answer, progress, Review link | 3 sessions | 1 (Markdown lessons) |
 | 3b | Write-your-own-SQL: in-browser engine, practice datasets, result comparison, broken-exercise check | 2 sessions | 3a |
+| 4 | Aha Listening (scripts for the ear, speech, player with lock-screen controls, history and resume, part length) | 3 sessions | 3a for learning topics; works on articles from day one |
 
 Each phase ends with the same routine as before: a QA agent, an AI-engineer prompt review (phases 2 and 3), a lead
 engineer review, and the full test suites. Each phase ships on its own.
@@ -329,3 +433,5 @@ engineer review, and the full test suites. Each phase ships on its own.
 | D5 | Where SQL answers are checked | (a) in the browser: simple, but a curious user could find the expected result with developer tools; (b) on the server with DuckDB: tamper-proof, but adds a native package to the Railway build | **(a)**: it's self-study, and "Show solution" exists anyway |
 | D6 | Daily cap on generated lessons | 10 / 20 / 50 per user per day | **20** |
 | D7 | Where Aha Learning lives | (a) a new **Learn** tab (Read · Learn · Notebook · Review · Settings); (b) inside the Notebook | **(a)** |
+| A1 | Speech for Aha Listening | (a) the browser's built-in speech; (b) a server speech service with real audio files | **Decided: (a) first**, behind a speech-provider interface so a server service (b) can be added later without changing the player or the scripts |
+| A2 | Daily audio cap | 30 / 60 / 120 generated minutes per user per day | **Decided: 240 for admins, 60 for everyone else**, set by environment variables (`AUDIO_DAILY_MINUTES_ADMIN`, `AUDIO_DAILY_MINUTES_USER`) through an entitlements module, so payment plans can set their own limits later |

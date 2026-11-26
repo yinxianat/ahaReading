@@ -88,6 +88,8 @@ export async function makeDocx(blocks, { extraFiles = {}, omitDocument = false }
     }
     if (b.heading) return `<w:p><w:pPr><w:pStyle w:val="Heading${b.level || 1}"/></w:pPr><w:r><w:t>${esc(b.heading)}</w:t></w:r></w:p>`;
     if (b.bullet) return `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>${esc(b.bullet)}</w:t></w:r></w:p>`;
+    // {p, strong, after}: a paragraph with a bold run in the middle.
+    if (b.strong) return `<w:p><w:r><w:t xml:space="preserve">${esc(b.p)}</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>${esc(b.strong)}</w:t></w:r><w:r><w:t xml:space="preserve">${esc(b.after || "")}</w:t></w:r></w:p>`;
     return `<w:p><w:r><w:t xml:space="preserve">${esc(b.p)}</w:t></w:r></w:p>`;
   };
   if (!omitDocument) {

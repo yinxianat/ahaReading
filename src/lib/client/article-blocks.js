@@ -6,10 +6,12 @@
  * plain text: nothing here or in the renderer ever interprets HTML.
  */
 import { parseArticleBlocks } from "@/lib/article-blocks.js";
+import { markdownUnits } from "@/lib/article-markdown.js";
 
 /**
  * @typedef {object} Block
- * @property {"p"|"h"|"li"|"code"} type
+ * @property {"p"|"h"|"li"|"code"|"quote"|"row"} type ("quote" and "row" only in Markdown articles)
+ * @property {Array<{start:number,end:number,kind:string,href?:string}>} [spans] formatting (Markdown articles)
  * @property {string} text what is shown and what selection offsets index into
  * @property {number} [level] heading level 1–3
  * @property {boolean} [ordered] item of a numbered list
@@ -19,9 +21,11 @@ import { parseArticleBlocks } from "@/lib/article-blocks.js";
 
 /**
  * @param {string} content article content as stored
+ * @param {"blocks"|"markdown"} [format] how it is stored (Article.format)
  * @returns {Block[]}
  */
-export function parseArticle(content) {
+export function parseArticle(content, format = "blocks") {
+  if (format === "markdown") return markdownUnits(content);
   const out = [];
   parseArticleBlocks(content).forEach((b, i) => {
     if (b.type === "heading") out.push({ type: "h", text: b.text, level: b.level });

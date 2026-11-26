@@ -100,6 +100,18 @@ describe("POST /api/articles (url)", () => {
     expect(again.article.title).toBe("Updated");
   });
 
+  it("web pages keep their formatting as Markdown (bold, links resolved to the page, tables)", async () => {
+    state.pages["https://docs.example/guide/star"] = html(
+      `<title>Star schemas</title><article><p>A <strong>fact table</strong> holds measures; see <a href="../dims">dimensions</a> and <a href="javascript:alert(1)">this</a>.</p><p>${LONG}</p>` +
+        `<table><tr><th>Table</th><th>Kind</th></tr><tr><td>sales</td><td>fact</td></tr></table></article>`
+    );
+    const { article } = await (await post({ url: "https://docs.example/guide/star" })).json();
+    expect(article.format).toBe("markdown");
+    expect(article.content).toContain("A **fact table** holds measures; see [dimensions](https://docs.example/dims) and this.");
+    expect(article.content).toContain("| Table | Kind |\n| --- | --- |\n| sales | fact |");
+    expect(article.content).not.toMatch(/javascript|<article|<p>/);
+  });
+
   it("blocks private / non-http / odd-port URLs and redirects into the private network", async () => {
     for (const url of ["http://127.0.0.1/", "file:///etc/passwd", "http://blog.example:8080/", "http://169.254.169.254/latest/meta-data/", "http://db.internal/"]) {
       const res = await post({ url });

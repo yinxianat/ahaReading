@@ -14,7 +14,7 @@
  * rejoined.
  */
 import { serializeArticleBlocks } from "./article-blocks.js";
-import { extractReadable } from "./extract.js";
+import { extractReadableMarkdown } from "./extract.js";
 import { MAX_ARTICLE_CHARS } from "./limits.js";
 import { DocumentImportError, UNWANTED_CHARS } from "./document-shared.js";
 
@@ -71,8 +71,9 @@ async function extractDocx(bytes) {
   }
   // Footnotes end with a "↑" back-link, which means nothing without the link.
   html = html.replace(/\s*<a href="#(?:footnote|endnote)-ref-[^"]*">↑<\/a>/g, "");
-  const extracted = extractReadable(`<html><body>${html}</body></html>`);
-  return { title: extracted.title, text: extracted.text };
+  // Word formatting (bold, italics, links, lists, tables) is kept as Markdown.
+  const extracted = extractReadableMarkdown(`<html><body>${html}</body></html>`);
+  return { title: extracted.title, text: extracted.markdown, format: "markdown" };
 }
 
 // ─── PDF ────────────────────────────────────────────────────────────────
