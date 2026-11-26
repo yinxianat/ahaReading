@@ -38,7 +38,7 @@ describe("anthropic adapter", () => {
   it("sends the 2026-10-21 version, fallback beta, effort low, no temperature; key only in header", async () => {
     respond(200, { model: "claude-opus-5-5", stop_reason: "end_turn", content: [{ type: "text", text: "Hi" }], usage: { input_tokens: 3, output_tokens: 4 } });
     const out = await anthropic.complete(call);
-    expect(out).toEqual({ text: "Hi", model: "claude-opus-5-5", tokensUsed: 7, inputTokens: 3, outputTokens: 4 });
+    expect(out).toEqual({ text: "Hi", model: "claude-opus-5-5", tokensUsed: 7, inputTokens: 3, outputTokens: 4, truncated: false });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.anthropic.com/v1/messages");
     expect(url).not.toContain("sk-ant");
@@ -91,7 +91,7 @@ describe("openai adapter", () => {
   it("bearer header, chat body, token sum", async () => {
     respond(200, { model: "gpt-4o", choices: [{ finish_reason: "stop", message: { content: "Hello" } }], usage: { total_tokens: 12, prompt_tokens: 9, completion_tokens: 3 } });
     const out = await openai.complete(call);
-    expect(out).toEqual({ text: "Hello", model: "gpt-4o", tokensUsed: 12, inputTokens: 9, outputTokens: 3 });
+    expect(out).toEqual({ text: "Hello", model: "gpt-4o", tokensUsed: 12, inputTokens: 9, outputTokens: 3, truncated: false });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.openai.com/v1/chat/completions");
     expect(init.headers.authorization).toBe("Bearer sk-test-openai");
@@ -121,7 +121,7 @@ describe("gemini adapter", () => {
   it("key in x-goog-api-key header, never in the URL", async () => {
     respond(200, { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "Hey" }] } }], usageMetadata: { totalTokenCount: 5, promptTokenCount: 2, candidatesTokenCount: 2, thoughtsTokenCount: 1 }, modelVersion: "gemini-2.5-flash" });
     const out = await google.complete(call);
-    expect(out).toEqual({ text: "Hey", model: "gemini-2.5-flash", tokensUsed: 5, inputTokens: 2, outputTokens: 3 });
+    expect(out).toEqual({ text: "Hey", model: "gemini-2.5-flash", tokensUsed: 5, inputTokens: 2, outputTokens: 3, truncated: false });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
     expect(url).not.toMatch(/key=/);
@@ -149,5 +149,16 @@ describe("gemini adapter", () => {
   it("MAX_TOKENS with no text → INFRASTRUCTURE; ignores thought parts", async () => {
     respond(200, { candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: "thinking", thought: true }] } }] });
     await expect(google.complete(call)).rejects.toMatchObject({ kind: ErrorKind.INFRASTRUCTURE });
+  });
+});
+
+describe("cut-off answers are flagged (stop at the output-token limit)", () => {
+  it("anthropic stop_reason max_tokens, openai finish_reason length, gemini MAX_TOKENS → truncated: true", async () => {
+    respond(200, { model: "m", stop_reason: "max_tokens", content: [{ type: "text", text: "Part one. Part tw" }], usage: { input_tokens: 1, output_tokens: 1 } });
+    expect((await anthropic.complete(call)).truncated).toBe(true);
+    respond(200, { model: "m", choices: [{ finish_reason: "length", message: { content: "Part one. Part tw" } }], usage: {} });
+    expect((await openai.complete(call)).truncated).toBe(true);
+    respond(200, { candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: "Part one. Part tw" }] } }], usageMetadata: {} });
+    expect((await google.complete(call)).truncated).toBe(true);
   });
 });

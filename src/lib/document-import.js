@@ -1,5 +1,10 @@
 /**
- * Uploaded documents (PDF, Word .docx) → readable article blocks.
+ * Uploaded documents (PDF, Word .docx, Markdown .md) → readable article blocks.
+ *
+ * Markdown has no signature bytes: a file is Markdown when its bytes are not PDF/Word/etc.,
+ * its name ends in .md/.markdown (or it was sent as text/markdown), and it is valid UTF-8
+ * without NUL bytes. It is converted in-process (markdown.js is linear and the source is
+ * capped), not in the parse worker.
  *
  * Trust nothing about the upload: the type comes from the file's first bytes, not its
  * name or Content-Type; a .docx (a zip) is size-checked from its central directory
@@ -9,9 +14,10 @@
  * block text of article-blocks.js, never HTML.
  */
 import { serializeArticleBlocks, parseArticleBlocks } from "./article-blocks.js";
-import { MAX_ARTICLE_CHARS, MAX_TITLE_CHARS } from "./limits.js";
+import { MAX_ARTICLE_CHARS, MAX_TITLE_CHARS, MARKDOWN_TYPES } from "./limits.js";
 import { DocumentImportError, UNWANTED_CHARS } from "./document-shared.js";
 import { parseInWorker } from "./document-sandbox.js";
+import { markdownToArticle } from "./markdown.js";
 
 export { DocumentImportError };
 
@@ -24,7 +30,27 @@ export const MAX_DOCX_ENTRIES = 5000;
 const MIN_TEXT_CHARS = 50;
 const MAX_FILE_NAME_CHARS = 200;
 
-const NOT_SUPPORTED = "We can read PDF and Word (.docx) files. For anything else, copy the text and use Paste text.";
+const NOT_SUPPORTED = "We can read PDF, Word (.docx) and Markdown (.md) files. For anything else, copy the text and use Paste text.";
+
+/**
+ * Is this upload meant to be Markdown (by name or declared type)? The bytes still decide.
+ * @param {string} fileName
+ * @param {string} [contentType]
+ */
+export function looksLikeMarkdown(fileName, contentType = "") {
+  return /\.(md|markdown)$/i.test(String(fileName || "")) || MARKDOWN_TYPES.includes(String(contentType).split(";")[0].trim().toLowerCase());
+}
+
+function decodeMarkdown(bytes) {
+  if (bytes.includes(0)) {
+    throw new DocumentImportError("file_unsupported", `That file isn't a text Markdown file. ${NOT_SUPPORTED}`, "markdown_binary");
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new DocumentImportError("file_unreadable", "We couldn't read this Markdown file: it isn't saved as UTF-8 text. Save it as UTF-8 in your editor and upload it again.", "markdown_not_utf8");
+  }
+}
 
 function startsWith(bytes, signature, offset = 0) {
   if (bytes.length < offset + signature.length) return false;
@@ -60,7 +86,7 @@ export function detectKind(bytes) {
  */
 export function titleFromFileName(fileName) {
   const base = String(fileName || "").split(/[\\/]/).pop() || "";
-  const stem = base.replace(/\.(pdf|docx?)$/i, "").replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
+  const stem = base.replace(/\.(pdf|docx?|md|markdown)$/i, "").replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
   return Array.from(stem || "Uploaded document").slice(0, MAX_TITLE_CHARS).join("");
 }
 
@@ -149,29 +175,33 @@ export function inspectZip(bytes) {
  * @param {{fileName?: string, signal?: AbortSignal, sandbox?: object}} [options]
  *   `signal` stops the parse when the client goes away; `sandbox` is passed to
  *   parseInWorker (tests only)
- * @returns {Promise<{title: string, text: string, kind: "pdf"|"docx"}>}
+ * @returns {Promise<{title: string, text: string, kind: "pdf"|"docx"|"markdown"}>}
  * @throws {DocumentImportError}
  */
-export async function extractDocument(bytes, { fileName = "", signal, sandbox = {} } = {}) {
-  const kind = detectKind(bytes);
+export async function extractDocument(bytes, { fileName = "", contentType = "", signal, sandbox = {} } = {}) {
+  const detected = detectKind(bytes);
+  // No signature matched, but the name or type says Markdown: treat it as text.
+  const kind = detected === null && looksLikeMarkdown(fileName, contentType) ? "markdown" : detected;
   if (kind === "ole") {
     throw new DocumentImportError("file_unsupported", "This is an older Word file (.doc). Open it in Word, Pages or Google Docs, save it as .docx or PDF, then upload that.", "doc_legacy");
   }
   if (kind === "rtf") {
     throw new DocumentImportError("file_unsupported", "Rich Text (.rtf) files aren't supported. Save it as .docx or PDF, then upload that.", "rtf");
   }
-  if (kind !== "pdf" && kind !== "zip") throw new DocumentImportError("file_unsupported", NOT_SUPPORTED, "unknown_signature");
+  if (kind !== "pdf" && kind !== "zip" && kind !== "markdown") throw new DocumentImportError("file_unsupported", NOT_SUPPORTED, "unknown_signature");
   if (kind === "zip" && !inspectZip(bytes).names.includes("word/document.xml")) {
     throw new DocumentImportError("file_unsupported", `That file isn't a Word document. ${NOT_SUPPORTED}`, "zip_not_docx");
   }
 
-  const extracted = await parseInWorker(bytes, kind, { signal, ...sandbox });
+  const extracted = kind === "markdown" ? markdownToArticle(decodeMarkdown(bytes)) : await parseInWorker(bytes, kind, { signal, ...sandbox });
   if (extracted.text.replace(/\s/g, "").length < MIN_TEXT_CHARS) {
     throw new DocumentImportError(
       "file_unreadable",
       kind === "pdf"
         ? "This PDF has no text we can read. It's probably scanned pages (pictures of text). Copy the text another way and use Paste text."
-        : "This Word file has no text we can read. Check it isn't empty, or paste the text instead.",
+        : kind === "markdown"
+          ? "This Markdown file has almost no text to read. Check it's the right file, or paste the text instead."
+          : "This Word file has no text we can read. Check it isn't empty, or paste the text instead.",
       "no_text"
     );
   }
@@ -180,5 +210,5 @@ export async function extractDocument(bytes, { fileName = "", signal, sandbox = 
   let text = extracted.text;
   const blocks = parseArticleBlocks(text);
   if (blocks[0]?.type === "heading" && blocks[0].text === title && blocks.length > 1) text = serializeArticleBlocks(blocks.slice(1));
-  return { kind: kind === "pdf" ? "pdf" : "docx", title, text: text.slice(0, MAX_ARTICLE_CHARS) };
+  return { kind: kind === "zip" ? "docx" : kind, title, text: text.slice(0, MAX_ARTICLE_CHARS) };
 }

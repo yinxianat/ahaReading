@@ -51,7 +51,10 @@ async function wantsDetail(request) {
  * unusable BASE_URL in production. 200 "degraded" when it serves but something is
  * missing (no AI provider, SMTP absent or failing). The fatal/warning rules come
  * from the diagnostics catalogue (HEALTH_IMPACT). Names of problems only, never
- * values; in production, anonymous callers get coarse checks without provider names.
+ * values. In production, only a signed-in admin sees the checks and problem names;
+ * everyone else gets just {status, timestamp} with the same status code, which is all
+ * the platform healthcheck needs. Telling the internet "secret missing" or "database
+ * empty" would point attackers at a misconfigured deploy.
  * @param {Request} [request]
  */
 export async function GET(request) {
@@ -75,16 +78,11 @@ export async function GET(request) {
     ai: configured === null ? "status_unavailable" : configured.length > 0 ? configured : "none",
     smtp: smtpState(),
   };
-  if (!(await wantsDetail(request))) {
-    checks.ai = Array.isArray(checks.ai) ? "ok" : checks.ai;
-    checks.smtp = checks.smtp === "configured" ? "ok" : "problem";
-  }
-
   const status = fatal.length > 0 ? "unhealthy" : warnings.length > 0 ? "degraded" : "ok";
   if (fatal.length > 0) alertError("system", "Health check returned 503", { fatal }).catch(() => {});
 
-  return Response.json(
-    { status, checks, fatal, warnings, timestamp: new Date().toISOString() },
-    { status: fatal.length > 0 ? 503 : 200, headers: { "Cache-Control": "no-store" } }
-  );
+  const init = { status: fatal.length > 0 ? 503 : 200, headers: { "Cache-Control": "no-store" } };
+  const timestamp = new Date().toISOString();
+  if (!(await wantsDetail(request))) return Response.json({ status, timestamp }, init);
+  return Response.json({ status, checks, fatal, warnings, timestamp }, init);
 }

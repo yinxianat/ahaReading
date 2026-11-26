@@ -16,10 +16,13 @@ import ErrorAlert from "@/components/ui/ErrorAlert.js";
 import Alert from "@/components/ui/Alert.js";
 import { announce } from "@/components/ui/announce.js";
 import LevelStepper, { LEVEL_NAMES } from "./LevelStepper.js";
+import KeepExploring, { FOLLOW_BY_KEY } from "./KeepExploring.js";
 import ExplanationText from "./ExplanationText.js";
 import SaveConceptForm from "./SaveConceptForm.js";
 
 const LOADING_LABEL = { 1: "Thinking…", 2: "Finding an analogy…", 3: "Digging deeper…" };
+// A follow-up's results are kept per mode + the explanation it continues.
+const followCacheKey = (f) => (f ? `${f.key}:${f.basedOn}` : null);
 const IDLE_PHASE = { slow: false, verySlow: false };
 // Errors where the Notebook is the useful way out while AI is unavailable.
 const NOTEBOOK_WAYOUT = new Set(["ai_unavailable", "daily_limit"]);
@@ -46,7 +49,12 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveSettled, setSaveSettled] = useState(false);
   const [expandKey, setExpandKey] = useState(0);
+  // A follow-up on screen ({key, basedOn}) or null for levels 1–3; results by key + base.
+  const [follow, setFollow] = useState(null);
+  const [followResults, setFollowResults] = useState({});
   const online = useOnline();
+  // The view to return to when a follow-up in flight is cancelled.
+  const followBack = useRef(null);
 
   const controller = useRef(null);
   const timers = useRef([]);
@@ -56,6 +64,10 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
   // The level the user was reading before the request in flight (Cancel returns there).
   const backTo = useRef(null);
   const saveRef = useRef(null);
+  // Top of the explanation area: focus lands here when a follow-up replaces the view
+  // (the button that was pressed disappears), so keyboard and screen reader users keep their place.
+  const viewRef = useRef(null);
+  const focusView = () => setTimeout(() => viewRef.current?.focus({ preventScroll: true }), 0);
 
   useEffect(() => {
     showZhRef.current = showZh;
@@ -124,6 +136,51 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
     [snapshot, articleId, translate]
   );
 
+  const fetchFollow = useCallback(
+    (f) => {
+      controller.current?.abort();
+      const c = new AbortController();
+      controller.current = c;
+      clearTimers();
+      const meta = FOLLOW_BY_KEY[f.key];
+      timers.current = [
+        setTimeout(() => {
+          setPhase((p) => ({ ...p, slow: true }));
+          announce(meta.loading);
+        }, 150),
+        setTimeout(() => setPhase((p) => ({ ...p, verySlow: true })), 8000),
+      ];
+      const ck = followCacheKey(f);
+      const body = {
+        highlightedText: snapshot.highlightedText,
+        surroundingText: snapshot.surroundingText,
+        helpLevel: 3,
+        language: "en",
+        followUp: f.key,
+        basedOn: f.basedOn,
+      };
+      if (articleId) body.articleId = articleId;
+      api("/api/explain", { method: "POST", body, signal: c.signal, timeoutMs: AI_CLIENT_TIMEOUT_MS })
+        .then((data) => {
+          if (c.signal.aborted) return;
+          setFollowResults((r) => ({ ...r, [ck]: { status: "ready", data } }));
+          announce(`${meta.label}: ready.`);
+          if (showZhRef.current && data?.explanationId) translate(data.explanationId);
+        })
+        .catch((err) => {
+          if (err.code === "aborted") return;
+          setFollowResults((r) => ({ ...r, [ck]: { status: "error", error: err } }));
+        })
+        .finally(() => {
+          if (controller.current === c) {
+            clearTimers();
+            setPhase(IDLE_PHASE);
+          }
+        });
+    },
+    [snapshot, articleId, translate]
+  );
+
   useEffect(() => {
     fetchLevel(defaultLevel);
     return () => {
@@ -151,6 +208,17 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
     controller.current?.abort();
     clearTimers();
     setPhase(IDLE_PHASE);
+    if (follow) {
+      // Back to whatever was on screen before this follow-up was asked for.
+      setFollowResults((r) => {
+        const copy = { ...r };
+        delete copy[followCacheKey(follow)];
+        return copy;
+      });
+      setFollow(followBack.current);
+      focusView();
+      return;
+    }
     const ready = [1, 2, 3].filter((n) => levels[n]?.status === "ready");
     if (ready.length === 0) {
       onClose({ restore: true });
@@ -169,6 +237,11 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
   // (PO-2). Only unfetched *deeper* levels wait for "Still confused".
   const highest = Math.max(level, ...[1, 2, 3].filter((n) => levels[n]?.status === "ready"));
   const selectLevel = (n) => {
+    if (follow) {
+      controller.current?.abort();
+      setFollow(null);
+      if (n === level && levels[n]?.status === "ready") return;
+    }
     if (n === level && levels[n]?.status !== "error") return;
     if (levels[n]?.status === "ready") {
       setLevel(n);
@@ -188,13 +261,54 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
     setTimeout(() => saveRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 350);
   };
 
+  // What is on screen: a follow-up when one is open, otherwise the selected level.
+  const current = follow ? followResults[followCacheKey(follow)] || { status: "loading" } : levels[level] || { status: "loading" };
+  const followMeta = follow ? FOLLOW_BY_KEY[follow.key] : null;
+
   const toggleZh = (on) => {
     setShowZh(on);
-    const id = levels[level]?.data?.explanationId;
+    const id = current.data?.explanationId;
     if (on && id) translate(id);
   };
 
-  const current = levels[level] || { status: "loading" };
+  const startFollow = (key) => {
+    const basedOn = current.status === "ready" ? current.data?.explanationId : null;
+    if (!basedOn) return;
+    const next = { key, basedOn };
+    followBack.current = follow;
+    setFollow(next);
+    setSaveOpen(false);
+    setSaveSettled(false);
+    setPhase(IDLE_PHASE);
+    focusView();
+    const existing = followResults[followCacheKey(next)];
+    if (existing?.status === "ready") {
+      announce(`${FOLLOW_BY_KEY[key].label}.`);
+      if (showZh && existing.data?.explanationId) translate(existing.data.explanationId);
+      return;
+    }
+    setFollowResults((r) => ({ ...r, [followCacheKey(next)]: { status: "loading" } }));
+    fetchFollow(next);
+  };
+  const backToDeepDive = () => {
+    controller.current?.abort();
+    clearTimers();
+    setPhase(IDLE_PHASE);
+    setFollow(null);
+    setLevel(3);
+    setSaveOpen(false);
+    setSaveSettled(false);
+    focusView();
+    announce(`Explanation, level 3, ${LEVEL_NAMES[3]}.`);
+    const id = levels[3]?.data?.explanationId;
+    if (showZh && id) translate(id);
+  };
+  // Ask again for whatever is on screen (Retry, "Explain again"): the follow-up when one is open.
+  const retry = () => {
+    if (!follow) return startLevel(level);
+    setFollowResults((r) => ({ ...r, [followCacheKey(follow)]: { status: "loading" } }));
+    fetchFollow(follow);
+  };
   const fetchedLevels = [1, 2, 3].filter((n) => levels[n]?.status === "ready");
   const explanationId = current.status === "ready" ? current.data?.explanationId : null;
   const translation = explanationId ? translations[explanationId] : null;
@@ -284,12 +398,22 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
       snapPoints={[0.55, 0.92]}
       expandKey={expandKey}
     >
-      <div className="pt-4" aria-busy={current.status === "loading"}>
+      <div ref={viewRef} tabIndex={-1} className="pt-4 outline-none" aria-busy={current.status === "loading"}>
+        {followMeta ? (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+            <p className="text-[13px] font-semibold tracking-[.02em] text-accent">
+              Deep dive <span aria-hidden="true">›</span> {followMeta.label}
+            </p>
+            <button type="button" className="inline-flex min-h-[44px] items-center text-[14px] font-semibold text-accent" onClick={backToDeepDive}>
+              Back to deep dive
+            </button>
+          </div>
+        ) : null}
         {current.status === "loading" ? (
           phase.slow ? (
             <div>
-              <p className="mb-3 text-[15px] font-semibold text-muted">{LOADING_LABEL[level]}</p>
-              <Skeleton lines={4} widths={["100%", "95%", "88%", "60%"]} height={16} label={LOADING_LABEL[level]} />
+              <p className="mb-3 text-[15px] font-semibold text-muted">{followMeta ? followMeta.loading : LOADING_LABEL[level]}</p>
+              <Skeleton lines={4} widths={["100%", "95%", "88%", "60%"]} height={16} label={followMeta ? followMeta.loading : LOADING_LABEL[level]} />
               {phase.verySlow ? <p className="mt-2 text-[14px] text-muted">Still working — trying a backup. This can take up to 30 seconds.</p> : null}
             </div>
           ) : (
@@ -301,7 +425,7 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
           <ErrorAlert
             error={current.error}
             context="explain"
-            onRetry={() => startLevel(level)}
+            onRetry={retry}
             onPickText={onPickDifferent}
             extraActions={
               NOTEBOOK_WAYOUT.has(current.error?.code)
@@ -314,7 +438,7 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
         ) : null}
 
         {current.status === "ready" ? (
-          <div key={level} className="anim-fade">
+          <div key={follow ? followCacheKey(follow) : level} className="anim-fade">
             <ExplanationText text={current.data?.explanation} className="font-reading text-read" />
 
             {showZh ? (
@@ -335,7 +459,7 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
                     onRetry={() => translate(explanationId, { force: true })}
                     extraActions={[
                       translation.error?.code === "not_found"
-                        ? { label: "Explain again", onClick: () => startLevel(level) }
+                        ? { label: "Explain again", onClick: retry }
                         : { label: "Show English", onClick: () => setShowZh(false) },
                     ]}
                   />
@@ -353,14 +477,16 @@ export default function ExplainPanel({ snapshot, articleId, defaultLevel, locale
                   disabled={!online}
                   initialMode="form"
                   onCancel={() => setSaveOpen(false)}
-                  onExplainAgain={() => startLevel(level)}
+                  onExplainAgain={retry}
                   defaultTerm={snapshot.highlightedText}
                   onSettled={() => setSaveSettled(true)}
                 />
               </div>
             ) : null}
 
-            {level === 3 ? (
+            {level === 3 || follow ? <KeepExploring current={follow?.key ?? null} onPick={startFollow} disabled={!online} /> : null}
+
+            {level === 3 && !follow ? (
               <Alert
                 tone="neutral"
                 className="mt-5"

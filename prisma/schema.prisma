@@ -87,6 +87,8 @@ model Explanation {
   language        String   @default("en")
   explanation     String
   translationZh   String? // filled by /api/translate; copied to Concept.definitionZh on save
+  followUp        String? // null for levels 1-3; "deeper" | "big_picture" | "related" when continuing an explanation
+  basedOnId       String? // the explanation a follow-up continues (same user)
   aiProvider      String?
   aiModel         String?
   aiTokensUsed    Int?

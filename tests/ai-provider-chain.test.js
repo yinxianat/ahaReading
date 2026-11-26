@@ -398,3 +398,23 @@ describe("[PO-16] validation-failure spike escalates to ERROR", () => {
     expect(vi.mocked(logger.error).mock.calls.filter((c) => c[1] === "AI output validation failing repeatedly")).toHaveLength(1);
   });
 });
+
+describe("runChain: answers cut off at maxTokens", () => {
+  const params = { task: "explain", system: "s", userMessage: "u", maxTokens: 100 };
+
+  it("trims a truncated answer to its last whole sentence and notes it in the ledger", async () => {
+    const a = fakeProvider("a", async ({ model }) => ({ text: "First sentence is whole. Second one is whole too. Third one stops mid-wo", model, tokensUsed: 9, truncated: true }));
+    process.env.AI_PROVIDER_CHAIN = "a";
+    const result = await withRegistry({ a }, () => runChain(params));
+    expect(result.text).toBe("First sentence is whole. Second one is whole too.");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(state.aiCalls.at(-1)).toMatchObject({ status: "ok", detail: "truncated at max tokens" });
+  });
+
+  it("leaves a complete answer alone", async () => {
+    const a = fakeProvider("a", async ({ model }) => ({ text: "Done here. And no full stop at the end", model, tokensUsed: 9, truncated: false }));
+    process.env.AI_PROVIDER_CHAIN = "a";
+    const result = await withRegistry({ a }, () => runChain(params));
+    expect(result.text).toBe("Done here. And no full stop at the end");
+  });
+});

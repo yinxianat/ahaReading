@@ -28,7 +28,7 @@ const openai = {
 
   /**
    * @param {{system: string, userMessage: string, model?: string, maxTokens?: number, signal?: AbortSignal}} params
-   * @returns {Promise<{text: string, model: string, tokensUsed: number, inputTokens: number, outputTokens: number}>}
+   * @returns {Promise<{text: string, model: string, tokensUsed: number, inputTokens: number, outputTokens: number, truncated: boolean}>}
    */
   async complete({ system, userMessage, model, maxTokens, signal }) {
     const key = process.env.OPENAI_API_KEY;
@@ -70,7 +70,8 @@ const openai = {
 
     const inputTokens = data.usage?.prompt_tokens || 0;
     const outputTokens = data.usage?.completion_tokens || 0;
-    return { text, model: data.model || selected, tokensUsed: data.usage?.total_tokens || inputTokens + outputTokens, inputTokens, outputTokens };
+    const truncated = choice?.finish_reason === "length";
+    return { text, model: data.model || selected, tokensUsed: data.usage?.total_tokens || inputTokens + outputTokens, inputTokens, outputTokens, truncated };
   },
 };
 

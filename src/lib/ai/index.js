@@ -6,6 +6,7 @@ import mock from "./providers/mock.js";
 import prisma from "@/lib/db.js";
 import { logger } from "@/lib/logger.js";
 import { redact } from "@/lib/redact.js";
+import { trimToLastSentence } from "./safety.js";
 
 /**
  * Provider registry. To add a provider, write an adapter implementing
@@ -145,6 +146,7 @@ function attempt(provider, params, timeoutMs) {
  * - Each attempt gets min(AI_TIMEOUT_MS, time left before AI_CHAIN_DEADLINE_MS).
  * - INFRASTRUCTURE (incl. timeout) → record, log, try the next provider.
  * - REFUSAL → record and stop (no shopping for a yes).
+ * - An answer cut off at maxTokens (adapter `truncated`) is trimmed to its last whole sentence.
  * - `validate(text)` failing → record invalid_output and stop with INVALID_OUTPUT.
  * - Deadline reached → remaining providers are recorded as "skipped".
  * - All failed → one error log (the logger alerts the admin), throw INFRASTRUCTURE.
@@ -192,6 +194,12 @@ export async function runChain({ task, system, userMessage, model, maxTokens, va
       spendTokens(tokens);
 
       let text = result.text;
+      // An answer cut off at maxTokens ends mid-sentence: show it up to its last whole sentence.
+      const truncated = result.truncated === true;
+      if (truncated) {
+        text = trimToLastSentence(text);
+        void logger.warn("ai", "AI output hit the output-token limit", { task, provider: provider.name, maxTokens });
+      }
       if (validate) {
         const check = validate(text);
         if (!check.valid) {
@@ -203,7 +211,7 @@ export async function runChain({ task, system, userMessage, model, maxTokens, va
         if (typeof check.text === "string") text = check.text;
       }
 
-      void recordAiCall({ task, provider: provider.name, model: result.model, status: "ok", ...usage, latencyMs });
+      void recordAiCall({ task, provider: provider.name, model: result.model, status: "ok", ...usage, latencyMs, detail: truncated ? "truncated at max tokens" : null });
       return { text, provider: provider.name, model: result.model || selected, tokensUsed: tokens, latencyMs: Date.now() - started };
     } catch (raw) {
       if (raw instanceof ProviderError && raw.kind === ErrorKind.INVALID_OUTPUT) throw raw;

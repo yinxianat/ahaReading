@@ -132,7 +132,7 @@ export function describeError(err, context = "load") {
     case "upload_interrupted":
       return { tone: "warning", message: serverMessage || "The upload stopped before the whole file arrived. Check your connection and try again.", retryAfter: null, waitForOnline: false, recovery: "retry" };
     case "file_unsupported":
-      return { tone: "danger", message: serverMessage || "We can read PDF and Word (.docx) files. For anything else, paste the text instead.", retryAfter: null, waitForOnline: false, recovery: "paste_instead" };
+      return { tone: "danger", message: serverMessage || "We can read PDF, Word (.docx) and Markdown (.md) files. For anything else, paste the text instead.", retryAfter: null, waitForOnline: false, recovery: "paste_instead" };
     case "file_too_large":
       return { tone: "danger", message: serverMessage || "That file is too large. Upload a smaller file, or paste the part you want to read.", retryAfter: null, waitForOnline: false, recovery: "paste_instead" };
     case "file_unreadable":

@@ -353,3 +353,39 @@ describe("[QA4-1, QA4-2] hostile documents are contained by the parse worker", (
     expect(title).toBe("After the storm");
   });
 });
+
+describe("Markdown (.md) uploads", () => {
+  const enc = (s) => new TextEncoder().encode(s);
+  const MD = `# Consensus notes\n\n${PROSE} It uses **leaders** and [terms](https://raft.github.io).\n\n- safety\n- liveness\n`;
+
+  it("a .md file becomes a readable article; the opening heading is the title, shown once", async () => {
+    const r = await extractDocument(enc(MD), { fileName: "notes.md" });
+    expect(r.kind).toBe("markdown");
+    expect(r.title).toBe("Consensus notes");
+    const blocks = parseArticleBlocks(r.text);
+    expect(blocks[0].type).toBe("paragraph");
+    expect(blocks[0].text).toContain("It uses leaders and terms.");
+    expect(blocks[1]).toEqual({ type: "list", ordered: false, items: ["safety", "liveness"] });
+    expect(r.text).not.toMatch(/\*\*|\]\(|https:/);
+  });
+
+  it("recognised by declared type alone (text/markdown), or by .markdown; title falls back to the file name", async () => {
+    expect((await extractDocument(enc(MD), { contentType: "text/markdown" })).kind).toBe("markdown");
+    const noHeading = await extractDocument(enc(`${PROSE} ${PROSE}`), { fileName: "my_raft_notes.markdown" });
+    expect(noHeading.title).toBe("my raft notes");
+  });
+
+  it("the bytes still decide: a PDF named .md is read as a PDF; plain text without a .md name is refused", async () => {
+    const pdf = makePdf([[{ text: PROSE, y: 700 }]]);
+    expect((await extractDocument(pdf, { fileName: "sneaky.md" })).kind).toBe("pdf");
+    const err = await rejection(extractDocument(enc(MD), { fileName: "notes.txt" }));
+    expect(err.code).toBe("file_unsupported");
+  });
+
+  it("not UTF-8 → unreadable with a fix; binary (NUL bytes) → unsupported; nearly empty → no text", async () => {
+    const latin1 = new Uint8Array([...enc("# Caf"), 0xe9, ...enc(` ${PROSE}`)]);
+    expect(await rejection(extractDocument(latin1, { fileName: "x.md" }))).toMatchObject({ code: "file_unreadable", message: expect.stringMatching(/UTF-8/) });
+    expect(await rejection(extractDocument(new Uint8Array([...enc("# a"), 0, 1, 2]), { fileName: "x.md" }))).toMatchObject({ code: "file_unsupported" });
+    expect(await rejection(extractDocument(enc("# Title only\n\nhi"), { fileName: "x.md" }))).toMatchObject({ code: "file_unreadable", message: expect.stringMatching(/Markdown/) });
+  });
+});

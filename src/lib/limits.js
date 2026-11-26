@@ -15,10 +15,12 @@ export const MAX_TAG_CHARS = 50;
 export const MAX_NOTES_CHARS = 5000;
 export const MAX_DISPLAY_NAME_CHARS = 100;
 export const SIGN_IN_CODE_LENGTH = 6;
-/** Largest PDF or Word file accepted for upload (bytes). */
+/** Largest PDF, Word or Markdown file accepted for upload (bytes). */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 /** File types the Upload tab accepts (extensions, for the file picker and client checks). */
-export const UPLOAD_EXTENSIONS = [".pdf", ".docx"];
+export const UPLOAD_EXTENSIONS = [".pdf", ".docx", ".md", ".markdown"];
+/** Content types an upload may declare for Markdown (none of them can be sent cross-site without a preflight). */
+export const MARKDOWN_TYPES = ["text/markdown", "text/x-markdown"];
 /** Bookmarks: note length, how much of the marked text is kept, and a per-article ceiling. */
 export const MAX_BOOKMARK_NOTE_CHARS = 2000;
 export const MAX_BOOKMARK_QUOTE_CHARS = 300;

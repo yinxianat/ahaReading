@@ -4,7 +4,7 @@ import { checkRateLimit } from "@/lib/rate-limit.js";
 import { logger } from "@/lib/logger.js";
 import { createUploadedArticle, serializeArticle } from "@/lib/articles.js";
 import { DocumentImportError, cleanFileName } from "@/lib/document-import.js";
-import { MAX_UPLOAD_BYTES } from "@/lib/limits.js";
+import { MAX_UPLOAD_BYTES, MARKDOWN_TYPES } from "@/lib/limits.js";
 import { readUploadBody } from "@/lib/upload-body.js";
 
 // The file itself is the body, so it must say what it is. Every one of these makes a
@@ -15,6 +15,8 @@ const ACCEPTED_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/msword",
   "application/octet-stream",
+  // Markdown. Not text/plain: that is a "simple" type a cross-site form can send without a preflight.
+  ...MARKDOWN_TYPES,
 ]);
 const STATUS = { file_unsupported: 415, file_too_large: 413, file_unreadable: 422, server_busy: 503 };
 const MAX_MB = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
@@ -41,7 +43,7 @@ export const POST = withErrorHandling(async (request) => {
 
   const type = (request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
   if (!ACCEPTED_TYPES.has(type)) {
-    return jsonError(415, "file_unsupported", "We can read PDF and Word (.docx) files. For anything else, copy the text and use Paste text.", { field: "file" });
+    return jsonError(415, "file_unsupported", "We can read PDF, Word (.docx) and Markdown (.md) files. For anything else, copy the text and use Paste text.", { field: "file" });
   }
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES) return jsonError(413, "file_too_large", TOO_LARGE, { field: "file" });
@@ -63,10 +65,10 @@ export const POST = withErrorHandling(async (request) => {
       return jsonError(400, "upload_interrupted", "The upload stopped before the whole file arrived. Check your connection and try again.", { field: "file" });
     }
     if (body.tooLarge) return jsonError(413, "file_too_large", TOO_LARGE, { field: "file" });
-    if (body.bytes.length === 0) return badRequest("Choose a PDF or Word file to upload.", "file");
+    if (body.bytes.length === 0) return badRequest("Choose a PDF, Word or Markdown file to upload.", "file");
 
     const fileName = cleanFileName(request.headers.get("x-file-name"));
-    const { article, created } = await createUploadedArticle(userId, { bytes: body.bytes, fileName, signal: request.signal });
+    const { article, created } = await createUploadedArticle(userId, { bytes: body.bytes, fileName, contentType: type, signal: request.signal });
     return Response.json({ article: serializeArticle(article) }, { status: created ? 201 : 200 });
   } catch (err) {
     if (!(err instanceof DocumentImportError)) throw err;

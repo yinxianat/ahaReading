@@ -1,8 +1,10 @@
 /**
  * Safe plain-text renderer for AI output (UX-SPEC 4.5 body): blank lines →
- * paragraphs, "- " / "• " lines → bullets, **x** → bold. Nothing else, and
- * never HTML.
+ * paragraphs, "- " / "• " lines → bullets, "1." / "1)" lines → a numbered list,
+ * **x** → bold. Nothing else, and never HTML.
  */
+
+import { explanationBlocks } from "@/lib/client/explanation-blocks.js";
 
 function inline(text) {
   const parts = String(text).split(/(\*\*[^*]+\*\*)/g);
@@ -13,26 +15,28 @@ function inline(text) {
  * @param {{text:string, lang?:string, className?:string}} props
  */
 export default function ExplanationText({ text, lang, className = "" }) {
-  const blocks = String(text || "")
-    .replace(/\r\n?/g, "\n")
-    .split(/\n\s*\n/)
-    .map((b) => b.trim())
-    .filter(Boolean);
   return (
     <div lang={lang} className={`space-y-3 break-anywhere ${className}`}>
-      {blocks.map((block, i) => {
-        const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
-        const bullets = lines.every((l) => /^([-•*])\s+/.test(l));
-        if (bullets) {
+      {explanationBlocks(text).map((b, i) => {
+        if (b.type === "ul") {
           return (
             <ul key={i} className="list-disc space-y-1 pl-5">
-              {lines.map((l, j) => (
-                <li key={j}>{inline(l.replace(/^([-•*])\s+/, ""))}</li>
+              {b.items.map((item, j) => (
+                <li key={j}>{inline(item)}</li>
               ))}
             </ul>
           );
         }
-        return <p key={i}>{inline(lines.join(" "))}</p>;
+        if (b.type === "ol") {
+          return (
+            <ol key={i} start={b.start === 1 ? undefined : b.start} className="list-decimal space-y-2 pl-6">
+              {b.items.map((item, j) => (
+                <li key={j}>{inline(item)}</li>
+              ))}
+            </ol>
+          );
+        }
+        return <p key={i}>{inline(b.text)}</p>;
       })}
     </div>
   );

@@ -233,3 +233,47 @@ describe("round-2 guards on the AI routes", () => {
   });
 });
 
+
+describe("Keep exploring (follow-ups after a deep dive)", () => {
+  const deepDive = async (over = {}) => (await explain(req("/api/explain", body({ helpLevel: 3, ...over })))).json();
+
+  it("each follow-up continues the deep dive and is stored with what it continues", async () => {
+    const base = await deepDive({ highlightedText: "anti-entropy repair" });
+    for (const followUp of ["deeper", "big_picture", "related"]) {
+      const res = await explain(req("/api/explain", body({ highlightedText: "anti-entropy repair", followUp, basedOn: base.explanationId })));
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json).toMatchObject({ followUp, helpLevel: 3, cached: false });
+      expect(json.explanation).toContain(`Mock follow-up (${followUp})`);
+      const row = await prisma.explanation.findUnique({ where: { id: json.explanationId } });
+      expect(row).toMatchObject({ followUp, basedOnId: base.explanationId });
+    }
+  });
+
+  it("the same follow-up of the same explanation is served from the cache; a different base is not", async () => {
+    const base = await deepDive({ highlightedText: "vector clocks" });
+    const ask = (basedOn) => explain(req("/api/explain", body({ highlightedText: "vector clocks", followUp: "deeper", basedOn })));
+    expect((await (await ask(base.explanationId)).json()).cached).toBe(false);
+    expect((await (await ask(base.explanationId)).json()).cached).toBe(true);
+    // Going deeper from the deeper answer is a new question.
+    const deeper = await (await ask(base.explanationId)).json();
+    expect((await (await ask(deeper.explanationId)).json()).cached).toBe(false);
+  });
+
+  it("validates followUp and basedOn; never builds on another user's or another highlight's explanation", async () => {
+    const base = await deepDive({ highlightedText: "quorum reads" });
+    const field = async (over) => (await (await explain(req("/api/explain", body({ highlightedText: "quorum reads", ...over })))).json()).field;
+    expect(await field({ followUp: "sideways", basedOn: base.explanationId })).toBe("followUp");
+    expect(await field({ followUp: "deeper" })).toBe("basedOn");
+    expect(await field({ followUp: "deeper", basedOn: 5 })).toBe("basedOn");
+    expect(await field({ followUp: "toString", basedOn: base.explanationId })).toBe("followUp");
+
+    const other = await explain(req("/api/explain", body({ highlightedText: "something else", followUp: "deeper", basedOn: base.explanationId })));
+    expect(other.status).toBe(400);
+    expect((await other.json()).field).toBe("basedOn");
+
+    asUser(bob);
+    const stolen = await explain(req("/api/explain", body({ highlightedText: "quorum reads", followUp: "deeper", basedOn: base.explanationId })));
+    expect(stolen.status).toBe(404);
+  });
+});

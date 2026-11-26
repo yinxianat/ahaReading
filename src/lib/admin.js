@@ -201,7 +201,7 @@ export async function getMetrics() {
   const window = { createdAt: { gte: since } };
 
   const [
-    explTotal, explCacheHits, explAgg, byProviderRows, byHelpRows, byLangRows,
+    explTotal, explCacheHits, explAgg, byProviderRows, byHelpRows, byFollowRows, byLangRows,
     totalUsers, activeRows, conceptsTotal, dueNow, reviewsToday,
     errorsHour, errorsDay, bySeverityRows, tokenRows,
   ] = await Promise.all([
@@ -214,7 +214,9 @@ export async function getMetrics() {
       _count: { _all: true },
       _avg: { aiTokensUsed: true, aiLatencyMs: true },
     }),
-    prisma.explanation.groupBy({ by: ["helpLevel"], where: window, _count: { _all: true } }),
+    // "Keep exploring" follow-ups are stored at level 3; counted apart so level 3 means deep dives only.
+    prisma.explanation.groupBy({ by: ["helpLevel"], where: { ...window, followUp: null }, _count: { _all: true } }),
+    prisma.explanation.groupBy({ by: ["followUp"], where: { ...window, followUp: { not: null } }, _count: { _all: true } }),
     prisma.explanation.groupBy({ by: ["language"], where: window, _count: { _all: true } }),
     prisma.user.count(),
     // Counted in the database: loading every active row to dedupe in memory doesn't scale.
@@ -264,6 +266,7 @@ export async function getMetrics() {
       avgLatencyMs: Math.round(explAgg._avg.aiLatencyMs ?? 0),
       byProvider,
       byHelpLevel: toMap(byHelpRows, "helpLevel"),
+      byFollowUp: toMap(byFollowRows, "followUp"),
       byLanguage: toMap(byLangRows, "language"),
     },
     costEstimate,

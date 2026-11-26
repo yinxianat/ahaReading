@@ -369,7 +369,7 @@ function Recent() {
         <ErrorState title="Couldn't load your reading list." error={state.error} onRetry={() => { setState({ status: "loading", articles: [] }); setAttempt((a) => a + 1); }} />
       ) : null}
       {state.status === "ready" && state.articles.length === 0 ? (
-        <EmptyState icon="book" title="Nothing here yet" body="Paste an article above, import a link, or upload a PDF or Word file to start reading." />
+        <EmptyState icon="book" title="Nothing here yet" body="Paste an article above, import a link, or upload a PDF, Word or Markdown file to start reading." />
       ) : null}
       {state.status === "ready" && state.articles.length > 0 ? (
         <ul className="space-y-3">

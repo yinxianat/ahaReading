@@ -32,7 +32,7 @@ const anthropic = {
 
   /**
    * @param {{system: string, userMessage: string, model?: string, maxTokens?: number, signal?: AbortSignal}} params
-   * @returns {Promise<{text: string, model: string, tokensUsed: number, inputTokens: number, outputTokens: number}>}
+   * @returns {Promise<{text: string, model: string, tokensUsed: number, inputTokens: number, outputTokens: number, truncated: boolean}>}
    */
   async complete({ system, userMessage, model, maxTokens, signal }) {
     const key = process.env.ANTHROPIC_API_KEY;
@@ -85,7 +85,9 @@ const anthropic = {
 
     const inputTokens = data.usage?.input_tokens || 0;
     const outputTokens = data.usage?.output_tokens || 0;
-    return { text, model: data.model || selected, tokensUsed: inputTokens + outputTokens, inputTokens, outputTokens };
+    // max_tokens means the answer was cut off; the chain trims it back to a whole sentence.
+    const truncated = data.stop_reason === "max_tokens";
+    return { text, model: data.model || selected, tokensUsed: inputTokens + outputTokens, inputTokens, outputTokens, truncated };
   },
 };
 

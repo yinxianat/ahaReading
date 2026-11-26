@@ -15,7 +15,7 @@ import Icon from "@/components/ui/icons.js";
 
 // Parsing a long PDF takes a while on top of the upload itself.
 const UPLOAD_TIMEOUT_MS = 90_000;
-const ACCEPT = [...UPLOAD_EXTENSIONS, "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"].join(",");
+const ACCEPT = [...UPLOAD_EXTENSIONS, "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/markdown"].join(",");
 const MAX_MB = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
 // Some browsers label a .docx "application/zip" (or nothing); the server reads the bytes
 // to tell what a file is, so anything else goes as a generic binary type.
@@ -38,7 +38,7 @@ export function formatBytes(n) {
 export function fileProblem(file) {
   const name = String(file?.name || "").toLowerCase();
   if (name.endsWith(".doc")) return "This is an older Word file (.doc). Open it in Word, Pages or Google Docs, save it as .docx or PDF, then upload that.";
-  if (!UPLOAD_EXTENSIONS.some((ext) => name.endsWith(ext))) return "Choose a PDF or Word (.docx) file. For anything else, copy the text and use Paste text.";
+  if (!UPLOAD_EXTENSIONS.some((ext) => name.endsWith(ext))) return "Choose a PDF, Word (.docx) or Markdown (.md) file. For anything else, copy the text and use Paste text.";
   if (file.size === 0) return "That file is empty. Choose another one.";
   if (file.size > MAX_UPLOAD_BYTES) return `That file is ${formatBytes(file.size)}; the limit is ${MAX_MB} MB. Upload a smaller file, or paste the part you want to read.`;
   return null;
@@ -81,7 +81,7 @@ export default function UploadForm({ onPasteInstead }) {
     e?.preventDefault();
     if (inFlight.current) return;
     if (!file) {
-      setFieldError("Choose a PDF or Word file first.");
+      setFieldError("Choose a PDF, Word or Markdown file first.");
       return;
     }
     inFlight.current = true;
@@ -92,7 +92,12 @@ export default function UploadForm({ onPasteInstead }) {
     try {
       const data = await api("/api/articles/upload", {
         method: "POST",
-        body: SENDABLE_TYPES.has(file.type) ? file : file.slice(0, file.size, "application/octet-stream"),
+        // Browsers label .md files inconsistently (text/markdown, blank, octet-stream): always say Markdown.
+        body: /\.(md|markdown)$/i.test(file.name)
+          ? file.slice(0, file.size, "text/markdown")
+          : SENDABLE_TYPES.has(file.type)
+            ? file
+            : file.slice(0, file.size, "application/octet-stream"),
         headers: { "X-File-Name": encodeURIComponent(file.name) },
         timeoutMs: UPLOAD_TIMEOUT_MS,
         signal: controller.signal,
@@ -102,7 +107,7 @@ export default function UploadForm({ onPasteInstead }) {
       router.push(`/read/${data.article.id}`);
     } catch (err) {
       if (controller.signal.aborted) return; // unmounted: nobody is looking
-      if (err.code === "invalid_input") setFieldError(err.message || "Choose a PDF or Word file to upload.");
+      if (err.code === "invalid_input") setFieldError(err.message || "Choose a PDF, Word or Markdown file to upload.");
       else setError(err);
       inFlight.current = false;
       setBusy(false);
@@ -156,8 +161,8 @@ export default function UploadForm({ onPasteInstead }) {
       >
         <Icon name="upload" size={28} className="mx-auto text-muted" />
         <p className="mt-2 font-semibold">
-          <span className="hidden sm:inline">Drop a PDF or Word file here, or choose one</span>
-          <span className="sm:hidden">Choose a PDF or Word file</span>
+          <span className="hidden sm:inline">Drop a PDF, Word or Markdown file here, or choose one</span>
+          <span className="sm:hidden">Choose a PDF, Word or Markdown file</span>
         </p>
         <input
           ref={inputRef}
@@ -175,7 +180,7 @@ export default function UploadForm({ onPasteInstead }) {
           {file ? "Choose a different file" : "Choose a file"}
         </Button>
         <p id="upload-help" className="mt-3 text-[14px] text-muted">
-          PDF or Word (.docx), up to {MAX_MB} MB. Scanned PDFs (photos of pages) have no text to read.
+          PDF, Word (.docx) or Markdown (.md), up to {MAX_MB} MB. Scanned PDFs (photos of pages) have no text to read.
         </p>
       </div>
 

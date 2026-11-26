@@ -25,10 +25,13 @@ function sha256(input) {
  * @param {string} surroundingText
  * @param {number} helpLevel
  * @param {string} language
+ * @param {{kind: string, previous: string}|null} [followUp] follow-up mode and the explanation it continues
  * @returns {string}
  */
-export function computeCacheKey(highlightedText, surroundingText, helpLevel, language) {
-  return `explain:${sha256(JSON.stringify([KEY_VERSION, highlightedText, surroundingText, helpLevel, language]))}`;
+export function computeCacheKey(highlightedText, surroundingText, helpLevel, language, followUp = null) {
+  // A follow-up continues a specific earlier explanation, so that text is part of the question.
+  const extra = followUp ? [followUp.kind, sha256(followUp.previous)] : [];
+  return `explain:${sha256(JSON.stringify([KEY_VERSION, highlightedText, surroundingText, helpLevel, language, ...extra]))}`;
 }
 
 /**

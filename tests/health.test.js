@@ -72,14 +72,27 @@ describe("GET /api/health", () => {
     }
   );
 
-  it("503 in production without BASE_URL or with an unexpanded template", async () => {
+  it("503 in production without BASE_URL or with an unexpanded template (names shown to admins only)", async () => {
     process.env.NODE_ENV = "production";
+    process.env.ADMIN_EMAILS = "admin@example.test";
+    const { createSessionToken, SESSION_COOKIE } = await import("@/lib/auth.js");
+    const admin = { id: "u-admin", email: "admin@example.test", locale: "en", helpLevel: 1, displayName: null, onboardedAt: null, sessionVersion: 0 };
+    prisma.user.findUnique.mockResolvedValue(admin);
+    const token = await createSessionToken(admin);
+    const asAdmin = async () => {
+      const res = await GET(new Request("http://localhost/api/health", { headers: { cookie: `${SESSION_COOKIE}=${token}` } }));
+      return { status: res.status, body: await res.json() };
+    };
     delete process.env.BASE_URL;
-    expect((await check()).body.fatal).toContain("missing_base_url");
+    expect((await asAdmin()).body.fatal).toContain("missing_base_url");
     process.env.BASE_URL = "https://${{RAILWAY_PUBLIC_DOMAIN}}";
-    const { status, body } = await check();
+    const { status, body } = await asAdmin();
     expect(status).toBe(503);
     expect(body.fatal).toContain("base_url_unresolved_template");
+    // Anonymous: same 503, no reasons.
+    const anon = await check();
+    expect(anon.status).toBe(503);
+    expect(anon.body).not.toHaveProperty("fatal");
   });
 
   it("missing BASE_URL outside production is not fatal", async () => {
@@ -150,12 +163,20 @@ describe("GET /api/health", () => {
     }
   });
 
-  it("[SEC-13] production: anonymous callers get coarse checks (no provider names)", async () => {
+  it("[SEC-13] production: anonymous callers get only the status, never check or problem names", async () => {
     process.env.NODE_ENV = "production";
     const { body } = await check();
-    expect(body.checks.ai).toBe("ok");
-    expect(body.checks.smtp).toBe("ok");
-    expect(Object.keys(body).sort()).toEqual(["checks", "fatal", "status", "timestamp", "warnings"]);
+    expect(Object.keys(body).sort()).toEqual(["status", "timestamp"]);
+  });
+
+  it("[SEC-13] production: an unhealthy deploy still answers 503, without saying why", async () => {
+    process.env.NODE_ENV = "production";
+    delete process.env.JWT_SECRET;
+    const res = await GET(new Request("http://localhost/api/health"));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body).toEqual({ status: "unhealthy", timestamp: expect.any(String) });
+    expect(JSON.stringify(body)).not.toMatch(/jwt|secret|database|migrations|base_url/i);
   });
 
   it("[QA4-10] production: admin detail needs a session the database still accepts", async () => {
@@ -170,6 +191,6 @@ describe("GET /api/health", () => {
     expect((await asAdmin()).checks.ai).toEqual(["anthropic"]);
     // "Sign out of all devices" bumped the version: the old cookie is just anonymous now.
     prisma.user.findUnique.mockResolvedValue({ ...admin, sessionVersion: 1 });
-    expect((await asAdmin()).checks.ai).toBe("ok");
+    expect(await asAdmin()).not.toHaveProperty("checks");
   });
 });

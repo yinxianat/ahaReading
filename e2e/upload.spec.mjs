@@ -1,4 +1,4 @@
-// Upload a PDF or Word file as reading material (Library → Upload file).
+// Upload a PDF, Word or Markdown file as reading material (Library → Upload file).
 import { test, expect } from "./support/fixtures.mjs";
 import { makePdf, makeDocx, PROSE } from "../tests/fixtures/documents.js";
 
@@ -31,6 +31,30 @@ test.describe("upload a document", () => {
     // The Library lists it by file name.
     await page.goto("/read");
     await expect(page.locator("main li", { hasText: "Raft in one page" })).toContainText("raft-notes.pdf");
+  });
+
+  test("a Markdown file reads as clean text: structure kept, syntax gone", async ({ page, user }) => {
+    const input = await openUploadTab(page);
+    const md = [
+      "---", "title: Raft study notes", "---", "",
+      "# Raft study notes", "",
+      `${PROSE} Leaders use **heartbeats** — see [the paper](https://raft.github.io).`, "",
+      "## Roles", "", "- **Leader**: handles writes", "- [x] Follower", "",
+      "| Term | Meaning |", "|---|---|", "| quorum | a majority |", "",
+      "```js", "const term = 1;", "```", "",
+    ].join("\n");
+    await input.setInputFiles({ name: "raft-notes.md", mimeType: "text/markdown", buffer: Buffer.from(md) });
+    await expect(page.getByTestId("upload-file")).toContainText("raft-notes.md");
+    await page.getByRole("button", { name: "Upload and read" }).click();
+    await expect(page.getByRole("heading", { name: "Raft study notes", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Roles" })).toBeVisible();
+    await expect(page.locator("ul li", { hasText: "Leader: handles writes" })).toBeVisible();
+    await expect(page.locator("ul li", { hasText: "Term: quorum · Meaning: a majority" })).toBeVisible();
+    await expect(page.locator("pre[data-p]")).toHaveText("const term = 1;");
+    const article = await page.locator("article").innerText();
+    expect(article).toContain("Leaders use heartbeats — see the paper.");
+    expect(article).not.toMatch(/\*\*|\]\(|title:|\|---|```/);
+    await expect(page.getByText(/raft-notes\.md · Uploaded/)).toBeVisible();
   });
 
   test("a Word file uploads too", async ({ page, user }) => {

@@ -33,7 +33,7 @@ const gemini = {
 
   /**
    * @param {{system: string, userMessage: string, model?: string, maxTokens?: number, signal?: AbortSignal}} params
-   * @returns {Promise<{text: string, model: string, tokensUsed: number, inputTokens: number, outputTokens: number}>}
+   * @returns {Promise<{text: string, model: string, tokensUsed: number, inputTokens: number, outputTokens: number, truncated: boolean}>}
    */
   async complete({ system, userMessage, model, maxTokens, signal }) {
     const key = apiKey();
@@ -79,7 +79,8 @@ const gemini = {
     const inputTokens = data.usageMetadata?.promptTokenCount || 0;
     // Thinking tokens are billed as output.
     const outputTokens = (data.usageMetadata?.candidatesTokenCount || 0) + (data.usageMetadata?.thoughtsTokenCount || 0);
-    return { text, model: data.modelVersion || selected, tokensUsed: data.usageMetadata?.totalTokenCount || inputTokens + outputTokens, inputTokens, outputTokens };
+    const truncated = candidate?.finishReason === "MAX_TOKENS";
+    return { text, model: data.modelVersion || selected, tokensUsed: data.usageMetadata?.totalTokenCount || inputTokens + outputTokens, inputTokens, outputTokens, truncated };
   },
 };
 

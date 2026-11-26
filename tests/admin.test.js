@@ -142,6 +142,11 @@ describe("read models", () => {
     expect(m.users.activeToday).toBe(3);
     expect(m.period).toBe("last_24h");
     expect(m.explanations).toMatchObject({ total: 10, cacheHits: 4, cacheHitRate: "40.0%" });
+    // Follow-ups ("Keep exploring") are stored at level 3 but counted apart from deep dives.
+    const groups = prisma.explanation.groupBy.mock.calls.map((c) => c[0]);
+    expect(groups.find((g) => g.by[0] === "helpLevel").where.followUp).toBeNull();
+    expect(groups.find((g) => g.by[0] === "followUp").where.followUp).toEqual({ not: null });
+    expect(m.explanations.byFollowUp).toEqual({});
     expect(m.costEstimate).toMatchObject({ today: "$1.00", projectedMonthly: "$30.00" });
     expect(Object.keys(m)).toEqual(expect.arrayContaining(["users", "concepts", "errors"]));
   });

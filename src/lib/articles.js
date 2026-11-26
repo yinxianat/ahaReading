@@ -97,7 +97,7 @@ export async function createPastedArticle(userId, { text, title }) {
 }
 
 /**
- * Save an uploaded PDF or Word file as a new article. The same file uploaded again
+ * Save an uploaded PDF, Word or Markdown file as a new article. The same file uploaded again
  * soon after (a retry after a timeout, a double tap) reopens the article it made
  * instead of adding a duplicate.
  * @param {string} userId
@@ -105,8 +105,8 @@ export async function createPastedArticle(userId, { text, title }) {
  * @returns {Promise<{article: object, created: boolean}>}
  * @throws {import("./document-import.js").DocumentImportError}
  */
-export async function createUploadedArticle(userId, { bytes, fileName, signal }) {
-  const doc = await extractDocument(bytes, { fileName, signal });
+export async function createUploadedArticle(userId, { bytes, fileName, contentType, signal }) {
+  const doc = await extractDocument(bytes, { fileName, contentType, signal });
   const data = { fileName: fileName || null, title: doc.title, content: doc.text };
   const same = await prisma.article.findFirst({
     where: { userId, url: null, ...data, createdAt: { gte: new Date(Date.now() - DUPLICATE_UPLOAD_WINDOW_MS) } },

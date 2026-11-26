@@ -82,6 +82,22 @@ const streamed = (stream) =>
   upload(new Request("http://localhost/api/articles/upload", { method: "POST", headers: { "content-type": PDF }, body: stream, duplex: "half" }));
 
 describe("POST /api/articles/upload", () => {
+  it("a Markdown file uploads as text/markdown and reads without Markdown syntax", async () => {
+    const md = `# Raft notes\n\n${PROSE} See **the paper** at [raft.github.io](https://raft.github.io).\n\n| Term | Meaning |\n|---|---|\n| quorum | a majority |\n`;
+    const res = await send(new TextEncoder().encode(md), { type: "text/markdown", name: "raft.md" });
+    expect(res.status).toBe(201);
+    const { article } = await res.json();
+    expect(article).toMatchObject({ title: "Raft notes", fileName: "raft.md" });
+    expect(article.content).toContain("See the paper at raft.github.io.");
+    expect(article.content).toContain("- Term: quorum · Meaning: a majority");
+    expect(article.content).not.toMatch(/\*\*|\]\(|\|---/);
+  });
+
+  it("text/plain is still refused (a cross-site form could send it without a preflight)", async () => {
+    const res = await send(new TextEncoder().encode(`# Hi\n\n${PROSE}`), { type: "text/plain", name: "notes.md" });
+    expect(res.status).toBe(415);
+  });
+
   it("needs a session", async () => {
     state.user = null;
     expect((await send(samplePdf())).status).toBe(401);

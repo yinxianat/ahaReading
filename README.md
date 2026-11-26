@@ -28,8 +28,9 @@ It runs in a web browser on a laptop or a phone, and it can be installed on your
 
 | Feature | What you see |
 |---|---|
-| **Read** | Paste text, import an article from a web address, or upload a PDF or Word (.docx) file. Your articles are saved in a Library, where you can rename, edit or delete them. |
+| **Read** | Paste text, import an article from a web address, or upload a PDF, Word (.docx) or Markdown (.md) file. Your articles are saved in a Library, where you can rename, edit or delete them. |
 | **Explain, three levels** | Select text and tap *I don't understand*. Level 1 is a simple explanation. Level 2 uses an analogy or example. Level 3 is a detailed breakdown. You can move between levels at any time. |
+| **Keep exploring** | After a level-3 deep dive, choose **Go deeper**, **See the bigger picture** or **Expand the topic**. Each continues the explanation you just read instead of starting over, and you can keep going or jump back. |
 | **Bookmarks & progress** | The app remembers where you stopped and offers to continue. Bookmark any passage to **re-visit later** or mark it **important**, with a note; find them all on the Bookmarks page. |
 | **Chinese translation** | Any explanation can be translated into Mandarin Chinese. |
 | **Notebook** | Save an explained word or phrase as a "concept", or write your own, with notes and tags. Search, filter, edit and delete them. |
@@ -220,7 +221,7 @@ The same link is also printed in the terminal where `npm run dev` is running.
 ### A quick tour
 
 1. Sign in, and choose your language and starting help level.
-2. On **Read**, paste a few paragraphs of any technical text (or upload a PDF or Word file) and open it.
+2. On **Read**, paste a few paragraphs of any technical text (or upload a PDF, Word or Markdown file) and open it.
 3. Select a word or phrase, then tap **I don't understand**. Tap **Still confused?** to go up a level, and the
    **EN / 中文** switch for Chinese.
 4. Tap **Save to Notebook** to keep the concept.
@@ -339,6 +340,8 @@ AhaReading/
 | "Too many attempts" while signing in | Built-in protection against guessing. Wait for the timer, or restart `npm run dev` to reset it locally. |
 
 To see what the server thinks of its own setup, open <http://localhost:3000/api/health>. It lists any problems by name.
+On a production server it shows only `ok` / `degraded` / `unhealthy` unless you're signed in as an admin; the admin
+portal's Infrastructure tab has the details.
 
 ---
 
